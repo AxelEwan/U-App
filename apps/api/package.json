@@ -1,0 +1,25 @@
+{
+  "name": "@qzu/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup --config tsup.config.mjs",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@qzu/auth": "workspace:*",
+    "@hono/node-server": "2.1.1",
+    "@qzu/config": "workspace:*",
+    "@qzu/contracts": "workspace:*",
+    "@qzu/core": "workspace:*",
+    "@qzu/db": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.13.7"
+  },
+  "devDependencies": {
+    "tsup": "8.5.1",
+    "tsx": "4.20.6"
+  }
+}

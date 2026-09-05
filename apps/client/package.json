@@ -1,0 +1,42 @@
+{
+  "name": "@qzu/client",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "pnpm build:h5 && pnpm build:weapp",
+    "build:h5": "node scripts/taro.cjs build --type h5",
+    "build:weapp": "node scripts/taro.cjs build --type weapp",
+    "dev:h5": "node scripts/taro.cjs build --type h5 --watch",
+    "dev:weapp": "node scripts/taro.cjs build --type weapp --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
+  },
+  "dependencies": {
+    "@qzu/contracts": "workspace:*",
+    "@tarojs/components": "4.2.1",
+    "@tarojs/helper": "4.2.1",
+    "@tarojs/react": "4.2.1",
+    "@tarojs/runtime": "4.2.1",
+    "@tarojs/shared": "4.2.1",
+    "@tarojs/taro": "4.2.1",
+    "@tarojs/taro-h5": "4.2.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@babel/core": "7.28.4",
+    "@babel/preset-react": "7.29.7",
+    "@tarojs/cli": "4.2.1",
+    "@tarojs/plugin-framework-react": "4.2.1",
+    "@tarojs/plugin-platform-h5": "4.2.1",
+    "@tarojs/plugin-platform-weapp": "4.2.1",
+    "@tarojs/taro-loader": "4.2.1",
+    "@tarojs/webpack5-runner": "4.2.1",
+    "@pmmmwh/react-refresh-webpack-plugin": "0.5.15",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "babel-preset-taro": "4.2.1",
+    "less": "4.4.2",
+    "react-refresh": "0.14.2",
+    "vite": "4.5.14"
+  }
+}

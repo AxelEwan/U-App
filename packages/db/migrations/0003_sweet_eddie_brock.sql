@@ -1,0 +1,2 @@
+ALTER TABLE `attendance_policies` ADD `check_in_open_minutes_before` int unsigned DEFAULT 15 NOT NULL;--> statement-breakpoint
+ALTER TABLE `attendance_policies` ADD `check_in_close_minutes_after` int unsigned DEFAULT 15 NOT NULL;

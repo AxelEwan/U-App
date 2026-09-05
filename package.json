@@ -1,0 +1,31 @@
+{
+  "name": "qzu-platform",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0 <11"
+  },
+  "scripts": {
+    "build": "pnpm --recursive --if-present build",
+    "dev:api": "pnpm --filter @qzu/api dev",
+    "dev:admin": "pnpm --filter @qzu/admin dev",
+    "dev:client:h5": "pnpm --filter @qzu/client dev:h5",
+    "dev:client:weapp": "pnpm --filter @qzu/client dev:weapp",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json --pretty false && pnpm --recursive --if-present typecheck",
+    "db:generate": "pnpm --filter @qzu/db db:generate",
+    "db:migrate:safe": "node packages/db/scripts/migrate-safe.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.15.3",
+    "eslint": "10.10.0",
+    "globals": "16.4.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.69.0",
+    "vitest": "3.2.4"
+  }
+}
