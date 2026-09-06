@@ -13,6 +13,10 @@ coverage/
 .DS_Store
 work/
 outputs/
+private-data/
+*.roster.csv
+*.students.csv
+*.roster.json
 apps/client/.temp/
 /project.config.json
 /project.private.config.json

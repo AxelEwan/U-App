@@ -8,6 +8,27 @@
       "when": 1788693294230,
       "tag": "0000_clean_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1788701582535,
+      "tag": "0001_exotic_earthquake",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1788701625508,
+      "tag": "0002_orange_santa_claus",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1788702020449,
+      "tag": "0003_deep_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }

@@ -17,17 +17,21 @@ export default function SchedulePage() {
   const { apiRepository } = useMock()
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([])
   const [error, setError] = useState(false)
+  const [weekOffset, setWeekOffset] = useState(0)
   const today = weekday(new Date())
   useEffect(() => { void apiRepository.listSchedule().then(setSessions).catch(() => setError(true)) }, [apiRepository])
   const visibleDays = useMemo(() => dayLabels.map((label, index) => ({ label, weekday: index + 1 })), [])
+  const weekStart = useMemo(() => { const value = new Date(); value.setHours(0, 0, 0, 0); const day = value.getDay() || 7; value.setDate(value.getDate() - day + 1 + weekOffset * 7); return value }, [weekOffset])
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7)
+  const visibleSessions = sessions.filter((item) => { const value = new Date(item.scheduledStartAt); return value >= weekStart && value < weekEnd })
   const slots = Array.from({ length: endHour - startHour }, (_, index) => startHour + index)
   return <PageShell eyebrow="WEEKLY PLAN" title="课程表" subtitle="按周查看课程安排，点击课程查看详情。">
-    <View className="section-heading"><Text className="section-title">本周课程</Text><Text className="section-caption">工作日重点显示</Text></View>
+    <View className="section-heading"><Text className="section-title">{weekOffset === 0 ? '本周课程' : weekOffset < 0 ? '上一周课程' : '下一周课程'}</Text><View><Text className="card-meta" onClick={() => setWeekOffset((value) => value - 1)}>上一周</Text><Text className="card-meta" style={{ marginLeft: 12 }} onClick={() => setWeekOffset((value) => value + 1)}>下一周</Text></View></View>
     {error ? <View className="empty-state"><Text className="empty-title">课程表暂时不可用</Text><Text className="empty-copy">请确认本地 API 已启动。</Text></View> : <ScrollView className="schedule-scroll" scrollX enhanced showScrollbar={false}>
       <View className="schedule-grid"><View className="schedule-head">时间</View>
         {visibleDays.map((day) => <View className={`schedule-head ${day.weekday === today ? 'today' : ''}`} key={day.weekday}>周{day.label}</View>)}
         {slots.flatMap((hour) => [<View className="schedule-time" key={`time-${hour}`}>{String(hour).padStart(2, '0')}:00</View>, ...visibleDays.map((day) => {
-          const course = sessions.find((item) => { const date = new Date(item.scheduledStartAt); return weekday(date) === day.weekday && date.getHours() === hour })
+          const course = visibleSessions.find((item) => { const date = new Date(item.scheduledStartAt); return weekday(date) === day.weekday && date.getHours() === hour })
           const current = course ? ['CHECKIN_OPEN', 'IN_PROGRESS'].includes(getSessionStatus(course)) : false
           return <View className={`schedule-cell ${day.weekday === today ? 'today' : ''}`} key={`${hour}-${day.weekday}`}>
             {course ? <View className={`course-block ${current ? 'current' : ''}`} onClick={() => void Taro.navigateTo({ url: `/pages/course-detail/index?id=${course.id}` })}><Text className="course-block-name">{course.projectName}</Text><Text className="course-block-location">{timeLabel(new Date(course.scheduledStartAt))} · {course.locationName ?? '地点待定'}</Text></View> : null}

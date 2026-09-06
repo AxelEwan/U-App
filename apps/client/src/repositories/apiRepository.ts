@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput } from '@qzu/contracts'
 import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
@@ -9,10 +9,15 @@ interface ListResponse<T> { readonly items: T[] }
 
 export class ApiRepository implements ClientRepository {
   private devUser: 'student' | 'admin' = 'student'
+  private authReady: Promise<void> | null = null
   public constructor(private readonly baseUrl = API_BASE_URL) {}
   setDevRole(role: 'STUDENT' | 'ADMIN'): void { this.devUser = role === 'ADMIN' ? 'admin' : 'student' }
 
   private async request<T>(path: string, options: Omit<Taro.request.Option, 'url'> = {}): Promise<T> {
+    if (process.env.TARO_APP_ENABLE_WECHAT_AUTH === 'true' && process.env.TARO_ENV === 'weapp' && !path.startsWith('/api/v1/auth/')) {
+      this.authReady ??= Taro.login().then(({ code }) => Taro.request({ url: `${this.baseUrl}/api/v1/auth/wechat/login`, method: 'POST', data: { code } }).then(() => undefined))
+      await this.authReady
+    }
     const response = await Taro.request<T>({
       ...options,
       url: `${this.baseUrl}${path}`,
@@ -52,6 +57,9 @@ export class ApiRepository implements ClientRepository {
   }
   getMe(): Promise<MeResponse> { return this.request<MeResponse>('/api/v1/me') }
   getTimetable(): Promise<TimetableResponse> { return this.request<TimetableResponse>('/api/v1/me/timetable') }
+  getOnboarding(): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding') }
+  verifyStudent(input: VerifyStudentInput): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding/verify', { method: 'POST', data: input }) }
+  enrollElectives(input: EnrollElectivesInput): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding/electives', { method: 'POST', data: input }) }
 }
 
 export const apiRepository = new ApiRepository()

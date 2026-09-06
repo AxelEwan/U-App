@@ -22,6 +22,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
             <nav aria-label="主导航">
               <Link href="/">Dashboard</Link>
               <Link href="/projects">Projects</Link>
+              <Link href="/attendance">签到工作台</Link>
             </nav>
             <p className="sidebar-note">M1 · 安全基础已启用</p>
           </aside>

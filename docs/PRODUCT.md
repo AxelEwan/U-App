@@ -4,14 +4,14 @@ QZU is a privacy-conscious campus attendance tool whose primary business object 
 
 ## Actors and access
 
-- Administrators manage projects, schedules, rosters, attendance, statistics, and future exports.
+- Administrators manage the fixed semester timetable, private roster, attendance workbench, attendance records, and CSV exports.
 - Members use H5 or the WeChat Mini Program to see relevant projects and their own attendance.
 - Ordinary members must not receive a class-wide name/absence matrix. Administrators may access the complete matrix.
 - The member navigation is `首页 / 课程表 / 我的`; users with `currentUser.capabilities.canManageProjects` additionally see `工作台`.
 
 ## Current scope
 
-M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contracts, schema/migrations, authentication boundaries, and API foundation. M3 adds real MySQL persistence, project authoring, member-bound timetable reads, and NORMAL button check-in. Casdoor, WeChat, location upload, passcode verification, QR, Excel, and advanced attendance management remain deferred.
+M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contracts, schema/migrations, authentication boundaries, and API foundation. The current scope reset adds fixed semester configuration, private roster import, student binding/elective enrollment contracts, personal timetable filtering, administrator-started NORMAL attendance, live roster state, overrides, finalization, and CSV export. Casdoor, production WeChat code exchange, location upload, passcode verification, QR, Excel, and complex platform abstractions remain deferred.
 
 ## Product invariants
 
@@ -25,6 +25,6 @@ M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contrac
 
 M1.5 establishes the user-facing product skeleton. M1.5.1 removes scenario tabs from the Dashboard: `HomeDashboard` renders active check-in, next session, today's schedule, or empty state from data. The single Taro client has shared route/navigation definitions, a WeChat custom TabBar, an H5 bottom navigation, a mobile-first weekly schedule, a management workspace, profile/settings skeletons, and repository adapters.
 
-The dashboard Mock Repository supports active check-in, next class countdown, multiple courses, and no-course states. The API Repository now reads `/api/v1/me/today` and `/api/v1/me/timetable`, and the dashboard/course detail can submit NORMAL check-in through the API. All countdowns are calculated from the current clock; no scenario is represented only by a hard-coded label. Mock roles are fictional `STUDENT` and `ADMIN` users and contain no real student names.
+The dashboard Mock Repository supports active check-in, next class countdown, multiple courses, and no-course states. The API Repository reads `/api/v1/me/today` and `/api/v1/me/timetable`, and the dashboard/course detail can submit NORMAL check-in through the API. The fixed-semester path stores roster identity in MySQL and uses the existing Project/EventSession engine. Mock roles are fictional `STUDENT` and `ADMIN` users and contain no real student names.
 
 M1.5.1 + M2 add the single dynamic Dashboard and read-oriented APIs. M3 keeps the same repository interface while selecting `memory` explicitly for review/tests or `mysql` for a local `u_app` database reached through `127.0.0.1:13306`. Admin project authoring persists Project, Schedule Rule, Attendance Policy, and generated Event Sessions; a roster member is required for NORMAL check-in. API responses contain timestamps/statuses, never preformatted Chinese countdown text. Provider-backed user login and production roster provisioning are still separate work.

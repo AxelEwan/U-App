@@ -18,6 +18,13 @@ describe('API application', () => {
     expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
 
+  it('resolves a provider session when development auth is disabled', async () => {
+    const app = createApp({ corsOrigins: [], devAuthEnabled: false, resolveMiniProgramSession: (token) => Promise.resolve(token === 'opaque' ? { userId: '00000000-0000-4000-8000-000000000099', displayName: 'Bound Student', identityProvider: 'WECHAT_MINIPROGRAM', sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: false } } : null) })
+    const response = await app.request('/api/v1/me', { headers: { Cookie: 'qzu_mini_session=opaque' } })
+    expect(response.status).toBe(200)
+    expect((await response.json() as { identityProvider: string }).identityProvider).toBe('WECHAT_MINIPROGRAM')
+  })
+
   it('returns projects and today data from the business repository', async () => {
     const app = createApp({ corsOrigins: [], devAuthEnabled: true })
     const projectsResponse = await app.request('/api/v1/projects')
@@ -86,5 +93,49 @@ describe('API application', () => {
     expect(attendanceRecordsResponseSchema.parse(await attendance.json()).items).toHaveLength(1)
     const timetable = await app.request('/api/v1/me/timetable', { headers: { 'X-Dev-User': 'student' } })
     expect(timetableResponseSchema.parse(await timetable.json()).items.length).toBeGreaterThan(0)
+  })
+
+  it('runs the fixed-semester student and attendance flow without exposing roster data in config', async () => {
+    const app = createApp({ corsOrigins: [], devAuthEnabled: true })
+    const admin = { 'Content-Type': 'application/json', 'X-Dev-User': 'admin' }
+    const student = { 'Content-Type': 'application/json', 'X-Dev-User': 'student' }
+    const config = await app.request('/api/v1/admin/semester-config', { method: 'POST', headers: admin, body: JSON.stringify({ code: '2026-fall-test', name: '测试学期', startDate: '2026-09-01', endDate: '2026-09-30', standardPeriods: [{ period: 1, startTime: '09:00', endTime: '10:30' }], classes: [{ classCode: 'TEST-01', name: '测试班' }], courses: [{ courseCode: 'REQ-01', name: '必修课', kind: 'REQUIRED' }, { courseCode: 'ELE-01', name: '选修课', kind: 'ELECTIVE' }], timetable: [{ classCode: 'TEST-01', courseCode: 'REQ-01', weekday: 2, startPeriod: 1, endPeriod: 1, classroom: 'A-101', startWeek: 1, endWeek: 4 }] }) })
+    expect(config.status).toBe(201)
+    const configBody = await config.json() as { classes: { id: string }[]; courses: { id: string; kind: string }[] }
+    const classId = configBody.classes[0]!.id
+    const required = configBody.courses.find((course) => course.kind === 'REQUIRED')!
+    const roster = await app.request('/api/v1/admin/roster', { method: 'POST', headers: admin, body: JSON.stringify({ semesterCode: '2026-fall-test', entries: [{ classCode: 'TEST-01', studentNo: '20260001', displayName: '测试同学' }] }) })
+    expect(roster.status).toBe(201)
+    const before = await app.request('/api/v1/me/onboarding', { headers: { 'X-Dev-User': 'student' } })
+    expect((await before.json() as { status: string }).status).toBe('NEEDS_BINDING')
+    const verify = await app.request('/api/v1/me/onboarding/verify', { method: 'POST', headers: student, body: JSON.stringify({ classId, displayName: '测试同学', studentNoLast4: '0001' }) })
+    expect(verify.status).toBe(200)
+    const verifyBody = await verify.json() as { status: string; electiveCourses: { id: string }[] }
+    expect(verifyBody.status).toBe('NEEDS_ELECTIVES')
+    const enrolled = await app.request('/api/v1/me/onboarding/electives', { method: 'POST', headers: student, body: JSON.stringify({ courseIds: [verifyBody.electiveCourses[0]!.id] }) })
+    expect((await enrolled.json() as { status: string }).status).toBe('READY')
+    const projects = await app.request('/api/v1/projects')
+    const projectItems = (await projects.json() as { items: { id: string; name: string }[] }).items
+    const courseProject = projectItems.find((project) => project.name === '必修课')!
+    const sessions = await app.request(`/api/v1/projects/${courseProject.id}/sessions`)
+    const session = (await sessions.json() as { items: { id: string }[] }).items[0]!
+    const timetable = await app.request('/api/v1/me/timetable', { headers: { 'X-Dev-User': 'student' } })
+    expect((await timetable.json() as { items: unknown[] }).items.length).toBeGreaterThan(0)
+    const start = await app.request(`/api/v1/sessions/${session.id}/attendance/start`, { method: 'POST', headers: admin, body: JSON.stringify({ durationMinutes: 10 }) })
+    expect(start.status).toBe(200)
+    const checkIn = await app.request(`/api/v1/sessions/${session.id}/check-in`, { method: 'POST', headers: student, body: '{}' })
+    expect(checkIn.status).toBe(201)
+    expect((await checkIn.json() as { status: string }).status).toBe('LATE')
+    const live = await app.request(`/api/v1/sessions/${session.id}/attendance/live`, { headers: { 'X-Dev-User': 'admin' } })
+    const liveBody = await live.json() as { present: number; late: number; records: { projectMemberId: string }[] }
+    expect(liveBody.late).toBe(1)
+    const override = await app.request(`/api/v1/sessions/${session.id}/attendance`, { method: 'PATCH', headers: admin, body: JSON.stringify({ projectMemberId: liveBody.records[0]!.projectMemberId, status: 'PRESENT' }) })
+    expect(override.status).toBe(200)
+    const finalized = await app.request(`/api/v1/sessions/${session.id}/attendance/finalize`, { method: 'POST', headers: admin, body: '{}' })
+    expect(finalized.status).toBe(200)
+    const csv = await app.request(`/api/v1/sessions/${session.id}/attendance.csv`, { headers: { 'X-Dev-User': 'admin' } })
+    expect(csv.status).toBe(200)
+    expect(await csv.text()).toContain('测试同学')
+    void required
   })
 })

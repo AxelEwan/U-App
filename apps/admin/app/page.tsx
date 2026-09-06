@@ -26,6 +26,7 @@ export default function DashboardPage() {
         <h2>Projects</h2>
         <p className="muted">项目列表和详情现在从 Hono 业务 API 读取。</p>
         <Link className="button" href="/projects">查看项目</Link>
+        <Link className="button button-secondary" href="/attendance">签到工作台</Link>
       </section>
     </>
   )

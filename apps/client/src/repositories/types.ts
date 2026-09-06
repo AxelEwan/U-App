@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput } from '@qzu/contracts'
 
 export interface ProjectRepository {
   listProjects(): Promise<readonly ProjectSummary[]>
@@ -23,6 +23,9 @@ export interface TodayRepository {
   getToday(): Promise<TodayResponse>
   getMe(): Promise<MeResponse>
   getTimetable(): Promise<TimetableResponse>
+  getOnboarding(): Promise<OnboardingResponse>
+  verifyStudent(input: VerifyStudentInput): Promise<OnboardingResponse>
+  enrollElectives(input: EnrollElectivesInput): Promise<OnboardingResponse>
 }
 
 export interface ClientRepository extends ProjectRepository, SessionRepository, TodayRepository {}

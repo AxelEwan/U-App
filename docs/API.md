@@ -60,6 +60,36 @@ Returns one timestamped session summary.
 
 Returns `{ serverTime, activeCheckin, nextSession, todaySessions }`. The API returns raw timestamps and status; clients derive the clock offset and countdown display.
 
+## Fixed semester and attendance flow
+
+### `POST /api/v1/auth/wechat/login`
+
+Exchanges a WeChat mini-program login code server-side and sets an HttpOnly session cookie. It is enabled only when the API has server-only WeChat credentials; Dev Auth is never used in production.
+
+### `POST /api/v1/admin/semester-config`
+
+Admin-only. Stores a versioned semester, classes, courses, standard periods, and fixed timetable, then materializes timetable entries into the existing Project/EventSession engine.
+
+### `POST /api/v1/admin/roster`
+
+Admin-only. Imports `{ semesterCode, entries: [{ classCode, studentNo, displayName }] }` into MySQL. The API returns only an import count.
+
+### `GET /api/v1/me/onboarding`, `POST /api/v1/me/onboarding/verify`, `POST /api/v1/me/onboarding/electives`
+
+Returns binding state and elective choices without exposing full student numbers. Verification requires class, display name, and the last four digits of the student number; the provider subject comes from `AuthContext`.
+
+### `POST /api/v1/sessions/:id/attendance/start`
+
+Admin-only. Starts NORMAL attendance for a materialized session and sets the server-owned window; default duration is 10 minutes.
+
+### `GET /api/v1/sessions/:id/attendance/live`
+
+Admin-only. Returns roster members, current statuses, and counts. The admin UI polls this endpoint while a session is open.
+
+### `PATCH /api/v1/sessions/:id/attendance`, `POST /api/v1/sessions/:id/attendance/finalize`, `GET /api/v1/sessions/:id/attendance.csv`
+
+Admin-only status override, finalize-to-ABSENT, and CSV export. Overrides and revocations retain the record and write audit data; records are never physically deleted.
+
 ## Stable error codes
 
 Clients may branch on `UNAUTHORIZED`, `FORBIDDEN`, `PROJECT_NOT_FOUND`, `SCHEDULE_RULE_NOT_FOUND`, `SESSION_NOT_FOUND`, `VALIDATION_ERROR`, and `DATABASE_UNAVAILABLE`; they must not depend on localized messages.

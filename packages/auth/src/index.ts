@@ -10,6 +10,7 @@ export interface AuthContext {
   readonly displayName?: string
   readonly avatarUrl?: string | null
   readonly identityProvider: IdentityProvider
+  readonly identitySubject?: string
   readonly sessionType: SessionType
   readonly capabilities: AuthCapabilities
 }

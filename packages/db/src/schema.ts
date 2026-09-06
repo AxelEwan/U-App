@@ -221,10 +221,13 @@ export const eventSessions = mysqlTable(
     scheduleRuleId: varchar('schedule_rule_id', { length: 36 }).references(() => scheduleRules.id, {
       onDelete: 'set null',
     }),
+    courseId: varchar('course_id', { length: 36 }),
     scheduledStartAt: timestamp('scheduled_start_at', { mode: 'date', fsp: 3 }).notNull(),
     scheduledEndAt: timestamp('scheduled_end_at', { mode: 'date', fsp: 3 }).notNull(),
     checkinOpenAt: timestamp('checkin_open_at', { mode: 'date', fsp: 3 }).notNull(),
     checkinCloseAt: timestamp('checkin_close_at', { mode: 'date', fsp: 3 }).notNull(),
+    attendanceStartedAt: timestamp('attendance_started_at', { mode: 'date', fsp: 3 }),
+    attendanceFinalizedAt: timestamp('attendance_finalized_at', { mode: 'date', fsp: 3 }),
     locationName: varchar('location_name', { length: 255 }),
     status: mysqlEnum('status', ['SCHEDULED', 'CANCELLED', 'COMPLETED'])
       .default('SCHEDULED')
@@ -234,6 +237,7 @@ export const eventSessions = mysqlTable(
   },
   (table) => [
     index('event_sessions_project_start_idx').on(table.projectId, table.scheduledStartAt),
+    index('event_sessions_course_start_idx').on(table.courseId, table.scheduledStartAt),
     index('event_sessions_rule_idx').on(table.scheduleRuleId),
     uniqueIndex('event_sessions_rule_start_uq').on(table.scheduleRuleId, table.scheduledStartAt),
   ],
@@ -340,4 +344,126 @@ export const attendanceFieldValues = mysqlTable(
       table.fieldDefinitionId,
     ),
   ],
+)
+
+export const semesterConfigs = mysqlTable(
+  'semester_configs',
+  {
+    id: uuid('id').primaryKey(),
+    code: varchar('code', { length: 32 }).notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    startDate: date('start_date', { mode: 'string' }).notNull(),
+    endDate: date('end_date', { mode: 'string' }).notNull(),
+    standardPeriods: json('standard_periods').$type<readonly { period: number; startTime: string; endTime: string }[]>().notNull(),
+    active: boolean('active').default(false).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('semester_configs_code_uq').on(table.code)],
+)
+
+export const classes = mysqlTable(
+  'classes',
+  {
+    id: uuid('id').primaryKey(),
+    semesterId: varchar('semester_id', { length: 36 }).notNull().references(() => semesterConfigs.id, { onDelete: 'cascade' }),
+    classCode: varchar('class_code', { length: 64 }).notNull(),
+    name: varchar('name', { length: 120 }).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('classes_semester_code_uq').on(table.semesterId, table.classCode)],
+)
+
+export const courses = mysqlTable(
+  'courses',
+  {
+    id: uuid('id').primaryKey(),
+    semesterId: varchar('semester_id', { length: 36 }).notNull().references(() => semesterConfigs.id, { onDelete: 'cascade' }),
+    projectId: varchar('project_id', { length: 36 }).references(() => projects.id, { onDelete: 'set null' }),
+    courseCode: varchar('course_code', { length: 64 }).notNull(),
+    name: varchar('name', { length: 160 }).notNull(),
+    kind: mysqlEnum('kind', ['REQUIRED', 'ELECTIVE']).notNull(),
+    teacher: varchar('teacher', { length: 120 }),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('courses_semester_code_uq').on(table.semesterId, table.courseCode)],
+)
+
+export const classTimetable = mysqlTable(
+  'class_timetable',
+  {
+    id: uuid('id').primaryKey(),
+    classId: varchar('class_id', { length: 36 }).notNull().references(() => classes.id, { onDelete: 'cascade' }),
+    courseId: varchar('course_id', { length: 36 }).notNull().references(() => courses.id, { onDelete: 'cascade' }),
+    weekday: int('weekday', { unsigned: true }).notNull(),
+    startPeriod: int('start_period', { unsigned: true }).notNull(),
+    endPeriod: int('end_period', { unsigned: true }).notNull(),
+    classroom: varchar('classroom', { length: 160 }),
+    teacher: varchar('teacher', { length: 120 }),
+    startWeek: int('start_week', { unsigned: true }).notNull(),
+    endWeek: int('end_week', { unsigned: true }).notNull(),
+    weekPattern: mysqlEnum('week_pattern', ['ALL', 'ODD', 'EVEN']).default('ALL').notNull(),
+    specifiedWeeks: json('specified_weeks').$type<readonly number[] | null>(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('class_timetable_class_weekday_idx').on(table.classId, table.weekday)],
+)
+
+export const students = mysqlTable(
+  'students',
+  {
+    id: uuid('id').primaryKey(),
+    studentNo: varchar('student_no', { length: 64 }).notNull(),
+    displayName: varchar('display_name', { length: 120 }).notNull(),
+    classId: varchar('class_id', { length: 36 }).notNull().references(() => classes.id, { onDelete: 'restrict' }),
+    active: boolean('active').default(true).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('students_student_no_uq').on(table.studentNo), index('students_class_active_idx').on(table.classId, table.active)],
+)
+
+export const studentBindings = mysqlTable(
+  'student_bindings',
+  {
+    id: uuid('id').primaryKey(),
+    studentId: varchar('student_id', { length: 36 }).notNull().references(() => students.id, { onDelete: 'cascade' }),
+    userId: varchar('user_id', { length: 36 }).notNull().references(() => users.id, { onDelete: 'cascade' }),
+    provider: mysqlEnum('provider', ['WECHAT_MINIPROGRAM']).default('WECHAT_MINIPROGRAM').notNull(),
+    providerSubject: varchar('provider_subject', { length: 255 }).notNull(),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [uniqueIndex('student_bindings_student_uq').on(table.studentId), uniqueIndex('student_bindings_user_uq').on(table.userId), uniqueIndex('student_bindings_subject_uq').on(table.provider, table.providerSubject)],
+)
+
+export const studentCourseEnrollments = mysqlTable(
+  'student_course_enrollments',
+  {
+    id: uuid('id').primaryKey(),
+    studentId: varchar('student_id', { length: 36 }).notNull().references(() => students.id, { onDelete: 'cascade' }),
+    courseId: varchar('course_id', { length: 36 }).notNull().references(() => courses.id, { onDelete: 'cascade' }),
+    createdAt,
+  },
+  (table) => [uniqueIndex('student_course_enrollments_student_course_uq').on(table.studentId, table.courseId)],
+)
+
+export const attendanceAuditLogs = mysqlTable(
+  'attendance_audit_logs',
+  {
+    id: uuid('id').primaryKey(),
+    attendanceRecordId: varchar('attendance_record_id', { length: 36 })
+      .notNull()
+      .references(() => attendanceRecords.id, { onDelete: 'cascade' }),
+    operatorUserId: varchar('operator_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    previousStatus: mysqlEnum('previous_status', ['PRESENT', 'LATE', 'LEAVE', 'ABSENT']),
+    newStatus: mysqlEnum('new_status', ['PRESENT', 'LATE', 'LEAVE', 'ABSENT']).notNull(),
+    createdAt,
+  },
+  (table) => [index('attendance_audit_record_created_idx').on(table.attendanceRecordId, table.createdAt)],
 )

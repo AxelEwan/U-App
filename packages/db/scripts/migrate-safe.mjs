@@ -81,6 +81,14 @@ const allowedTables = new Set([
   'attendance_records',
   'custom_field_definitions',
   'attendance_field_values',
+  'semester_configs',
+  'classes',
+  'courses',
+  'class_timetable',
+  'students',
+  'student_bindings',
+  'student_course_enrollments',
+  'attendance_audit_logs',
 ])
 
 try {

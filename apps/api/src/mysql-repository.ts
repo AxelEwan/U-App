@@ -8,6 +8,12 @@ import type {
   CreateProjectMemberInput,
   CreateScheduleRuleInput,
   GenerateSessionsInput,
+  SemesterConfigInput,
+  SemesterConfigResponse,
+  OnboardingResponse,
+  AttendanceAdminActionInput,
+  AttendanceLiveResponse,
+  RosterEntry,
   ProjectSummary,
   ProjectMember,
   ScheduleRule,
@@ -18,8 +24,9 @@ import type {
   UpdateScheduleRuleInput,
 } from '@qzu/contracts'
 import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
-import { createDatabase, attendancePolicies, attendanceRecords, eventSessions, projectAdmins, projectMembers, projects, scheduleRules, users } from '@qzu/db'
-import { and, asc, eq, sql } from 'drizzle-orm'
+import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users } from '@qzu/db'
+import { and, asc, eq, like, sql } from 'drizzle-orm'
+import { createHash } from 'node:crypto'
 
 import { RepositoryError, type BusinessRepository } from './repository'
 import type { AuthContext } from '@qzu/auth'
@@ -136,6 +143,7 @@ export class MySqlBusinessRepository implements BusinessRepository {
       checkInInputSchema.parse(input)
       const sessionRow = (await this.db.select().from(eventSessions).where(eq(eventSessions.id, sessionId)).limit(1))[0]
       if (!sessionRow) throw new DomainError('SESSION_NOT_FOUND', 'Session not found')
+      if (!sessionRow.attendanceStartedAt) throw new DomainError('CHECKIN_NOT_OPEN', 'Attendance has not been started by an administrator')
       const policy = (await this.db.select().from(attendancePolicies).where(eq(attendancePolicies.projectId, sessionRow.projectId)).limit(1))[0]
       const member = await this.getMemberForUser(sessionRow.projectId, userId)
       const existing = member ? (await this.db.select().from(attendanceRecords).where(and(eq(attendanceRecords.sessionId, sessionId), eq(attendanceRecords.projectMemberId, member.id))).limit(1))[0] : undefined
@@ -154,6 +162,143 @@ export class MySqlBusinessRepository implements BusinessRepository {
     }
   }
   async listAttendance(sessionId: string): Promise<readonly AttendanceRecord[]> { try { return (await this.db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, sessionId)).orderBy(asc(attendanceRecords.createdAt))).map(mapAttendance) } catch { throw toRepositoryError() } }
+  async syncSemesterConfig(input: SemesterConfigInput, actor: AuthContext): Promise<SemesterConfigResponse> {
+    try {
+      const semesterId = crypto.randomUUID()
+      const classIds = new Map<string, string>()
+      const courseIds = new Map<string, { id: string; projectId: string }>()
+      await this.db.transaction(async (tx) => {
+        await tx.insert(semesterConfigs).values({ id: semesterId, code: input.code, name: input.name, startDate: input.startDate, endDate: input.endDate, standardPeriods: [...input.standardPeriods], active: input.active })
+        for (const item of input.classes) { const id = crypto.randomUUID(); classIds.set(item.classCode, id); await tx.insert(classTable).values({ id, semesterId, classCode: item.classCode, name: item.name }) }
+        await tx.insert(users).values({ id: actor.userId, displayName: actor.displayName ?? actor.userId, avatarUrl: actor.avatarUrl ?? null }).onDuplicateKeyUpdate({ set: { displayName: actor.displayName ?? actor.userId } })
+        for (const item of input.courses) {
+          const projectId = crypto.randomUUID(); const courseId = crypto.randomUUID(); courseIds.set(item.courseCode, { id: courseId, projectId })
+          await tx.insert(projects).values({ id: projectId, name: item.name, description: item.teacher ?? null, type: 'COURSE', timezone: 'Asia/Shanghai', effectiveStartDate: input.startDate, effectiveEndDate: input.endDate, status: 'ACTIVE', createdBy: actor.userId })
+          await tx.insert(projectAdmins).values({ id: crypto.randomUUID(), projectId, userId: actor.userId, role: 'OWNER' })
+          await tx.insert(courses).values({ id: courseId, semesterId, projectId, courseCode: item.courseCode, name: item.name, kind: item.kind, teacher: item.teacher ?? null })
+        }
+        const periods = new Map(input.standardPeriods.map((period) => [period.period, period]))
+        const addDays = (value: string, days: number) => { const date = new Date(`${value}T00:00:00Z`); date.setUTCDate(date.getUTCDate() + days); return date.toISOString().slice(0, 10) }
+        for (const item of input.timetable) {
+          const classId = classIds.get(item.classCode); const course = courseIds.get(item.courseCode); const start = periods.get(item.startPeriod); const end = periods.get(item.endPeriod)
+          if (!classId || !course || !start || !end) throw new Error('Invalid timetable reference')
+          await tx.insert(classTimetable).values({ id: crypto.randomUUID(), classId, courseId: course.id, weekday: item.weekday, startPeriod: item.startPeriod, endPeriod: item.endPeriod, classroom: item.classroom ?? null, teacher: item.teacher ?? null, startWeek: item.startWeek, endWeek: item.endWeek, weekPattern: item.weekPattern, specifiedWeeks: item.specifiedWeeks ?? null })
+          const generated = generateWeeklySessionTimes({ timezone: 'Asia/Shanghai', startDate: addDays(input.startDate, (item.startWeek - 1) * 7), endDate: addDays(input.startDate, item.endWeek * 7 - 1), weekdays: [item.weekday], intervalWeeks: item.weekPattern === 'ALL' ? 1 : 2, startTime: start.startTime, endTime: end.endTime })
+          const ruleId = crypto.randomUUID()
+          await tx.insert(scheduleRules).values({ id: ruleId, projectId: course.projectId, weekdays: [item.weekday], localStartTime: start.startTime, localEndTime: end.endTime, startDate: addDays(input.startDate, (item.startWeek - 1) * 7), endDate: addDays(input.startDate, item.endWeek * 7 - 1), intervalWeeks: item.weekPattern === 'ALL' ? 1 : 2, timezone: 'Asia/Shanghai' })
+          for (const occurrence of generated) await tx.insert(eventSessions).values({ id: crypto.randomUUID(), projectId: course.projectId, scheduleRuleId: ruleId, courseId: course.id, scheduledStartAt: occurrence.scheduledStartAt, scheduledEndAt: occurrence.scheduledEndAt, checkinOpenAt: occurrence.scheduledStartAt, checkinCloseAt: occurrence.scheduledEndAt, locationName: item.classroom ?? null, status: 'SCHEDULED' })
+        }
+      })
+      const semester = (await this.db.select().from(semesterConfigs).where(eq(semesterConfigs.id, semesterId)).limit(1))[0]
+      if (!semester) throw toRepositoryError()
+      const classRows = await this.db.select().from(classTable).where(eq(classTable.semesterId, semesterId)); const courseRows = await this.db.select().from(courses).where(eq(courses.semesterId, semesterId)); const timetableRows = (await Promise.all(classRows.map((item) => this.db.select().from(classTimetable).where(eq(classTimetable.classId, item.id))))).flat()
+      return { semester: { id: semester.id, code: semester.code, name: semester.name, startDate: semester.startDate, endDate: semester.endDate, standardPeriods: [...semester.standardPeriods], active: semester.active }, classes: classRows.map((item) => ({ id: item.id, semesterId: item.semesterId, classCode: item.classCode, name: item.name })), courses: courseRows.map((item) => ({ id: item.id, semesterId: item.semesterId, projectId: item.projectId, courseCode: item.courseCode, name: item.name, kind: item.kind, teacher: item.teacher })), timetable: timetableRows.map((item) => ({ id: item.id, classId: item.classId, courseId: item.courseId, weekday: item.weekday, startPeriod: item.startPeriod, endPeriod: item.endPeriod, classroom: item.classroom, teacher: item.teacher, startWeek: item.startWeek, endWeek: item.endWeek, weekPattern: item.weekPattern, specifiedWeeks: item.specifiedWeeks ? [...item.specifiedWeeks] : null })) }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async getOnboarding(userId: string): Promise<OnboardingResponse> {
+    try {
+      const semester = (await this.db.select().from(semesterConfigs).where(eq(semesterConfigs.active, true)).orderBy(asc(semesterConfigs.createdAt)).limit(1))[0]
+      const classRows = semester ? await this.db.select().from(classTable).where(eq(classTable.semesterId, semester.id)) : []
+      const binding = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0]
+      const student = binding ? (await this.db.select().from(students).where(eq(students.id, binding.studentId)).limit(1))[0] : undefined
+      const electiveRows = semester ? await this.db.select().from(courses).where(and(eq(courses.semesterId, semester.id), eq(courses.kind, 'ELECTIVE'))) : []
+      const selected = student ? await this.db.select().from(studentCourseEnrollments).where(eq(studentCourseEnrollments.studentId, student.id)) : []
+      const selectedIds = selected.map((item) => item.courseId)
+      return { status: student ? (electiveRows.length === 0 || selectedIds.length > 0 ? 'READY' : 'NEEDS_ELECTIVES') : 'NEEDS_BINDING', classOptions: classRows.map((item) => ({ id: item.id, semesterId: item.semesterId, classCode: item.classCode, name: item.name })), student: student ? { id: student.id, displayName: student.displayName, classId: student.classId } : null, electiveCourses: electiveRows.map((item) => ({ id: item.id, semesterId: item.semesterId, projectId: item.projectId, courseCode: item.courseCode, name: item.name, kind: item.kind, teacher: item.teacher })), selectedCourseIds: selectedIds }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string, providerSubject: string): Promise<OnboardingResponse> {
+    try {
+      const match = (await this.db.select().from(students).where(and(eq(students.classId, classId), eq(students.displayName, displayName), like(students.studentNo, `%${studentNoLast4}`))).limit(1))[0]
+      if (!match) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
+      const conflict = (await this.db.select().from(studentBindings).where(eq(studentBindings.studentId, match.id)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.providerSubject, providerSubject)).limit(1))[0]
+      if (conflict) throw new RepositoryError('NOT_FOUND', 'Student or identity is already bound')
+      await this.db.insert(users).values({ id: userId, displayName: match.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: match.displayName } })
+      await this.db.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId, provider: 'WECHAT_MINIPROGRAM', providerSubject })
+      const required = await this.db.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classId), eq(courses.kind, 'REQUIRED')))
+      for (const item of required) if (item.projectId) await this.db.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: item.projectId, userId, displayName: match.displayName, externalCode: match.studentNo }).onDuplicateKeyUpdate({ set: { displayName: match.displayName, externalCode: match.studentNo } })
+      return this.getOnboarding(userId)
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async enrollElectives(userId: string, courseIds: readonly string[]): Promise<OnboardingResponse> {
+    try {
+      const binding = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0]; if (!binding) throw new RepositoryError('NOT_FOUND', 'Student binding is required')
+      const student = (await this.db.select().from(students).where(eq(students.id, binding.studentId)).limit(1))[0]; if (!student) throw new RepositoryError('NOT_FOUND', 'Student not found')
+      for (const courseId of courseIds) {
+        const course = (await this.db.select().from(courses).where(and(eq(courses.id, courseId), eq(courses.kind, 'ELECTIVE'))).limit(1))[0]; if (!course) throw new RepositoryError('NOT_FOUND', 'Course is not an elective')
+        const offered = (await this.db.select({ id: classTimetable.id }).from(classTimetable).where(and(eq(classTimetable.classId, student.classId), eq(classTimetable.courseId, courseId))).limit(1))[0]; if (!offered) throw new RepositoryError('NOT_FOUND', 'Course is not offered to this class')
+        await this.db.insert(studentCourseEnrollments).values({ id: crypto.randomUUID(), studentId: student.id, courseId }).onDuplicateKeyUpdate({ set: { courseId } })
+        if (course.projectId) await this.db.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: course.projectId, userId, displayName: student.displayName, externalCode: student.studentNo }).onDuplicateKeyUpdate({ set: { displayName: student.displayName, externalCode: student.studentNo } })
+      }
+      return this.getOnboarding(userId)
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async startAttendance(sessionId: string, durationMinutes: number, actor: AuthContext, now = new Date()): Promise<SessionSummary> { void actor; try { await this.db.update(eventSessions).set({ checkinOpenAt: now, checkinCloseAt: new Date(now.getTime() + durationMinutes * 60_000), attendanceStartedAt: now }).where(eq(eventSessions.id, sessionId)); const value = await this.getSession(sessionId, now); if (!value) throw new RepositoryError('NOT_FOUND', 'Session not found'); return value } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() } }
+  async getLiveAttendance(sessionId: string, now = new Date()): Promise<AttendanceLiveResponse> { const session = await this.getSession(sessionId, now); if (!session) throw new RepositoryError('NOT_FOUND', 'Session not found'); const records = await this.listAttendance(sessionId); const roster = await this.listMembers(session.projectId); const total = roster.length; const active = records.filter((record) => !record.voidedAt); const recordByMember = new Map(active.map((record) => [record.projectMemberId, record])); const members = roster.map((member) => { const record = recordByMember.get(member.id); return { projectMemberId: member.id, userId: member.userId, displayName: member.displayName, externalCode: member.externalCode, status: record?.status ?? 'PENDING' as const, checkedInAt: record?.checkedInAt ?? null } }); return { session, total, present: active.filter((record) => record.status === 'PRESENT').length, late: active.filter((record) => record.status === 'LATE').length, leave: active.filter((record) => record.status === 'LEAVE').length, absent: active.filter((record) => record.status === 'ABSENT').length, pending: Math.max(0, total - active.length), records: [...records], members } }
+  async updateAttendance(sessionId: string, input: AttendanceAdminActionInput, actor: AuthContext, now = new Date()): Promise<AttendanceRecord> {
+    try {
+      const existing = (await this.db.select().from(attendanceRecords).where(and(eq(attendanceRecords.sessionId, sessionId), eq(attendanceRecords.projectMemberId, input.projectMemberId))).limit(1))[0]
+      if (input.status === 'VOID') { if (!existing) throw new RepositoryError('NOT_FOUND', 'Attendance record not found'); await this.db.update(attendanceRecords).set({ voidedAt: now, voidedByUserId: actor.userId, updatedAt: now }).where(eq(attendanceRecords.id, existing.id)); await this.db.insert(attendanceAuditLogs).values({ id: crypto.randomUUID(), attendanceRecordId: existing.id, operatorUserId: actor.userId, previousStatus: existing.status, newStatus: existing.status }); const row = (await this.db.select().from(attendanceRecords).where(eq(attendanceRecords.id, existing.id)).limit(1))[0]; if (!row) throw toRepositoryError(); return mapAttendance(row) }
+      const checkedInAt = input.status === 'PRESENT' || input.status === 'LATE' ? (existing?.checkedInAt ?? now) : existing?.checkedInAt ?? null
+      const id = existing?.id ?? crypto.randomUUID()
+      if (existing) await this.db.update(attendanceRecords).set({ status: input.status, source: 'ADMIN', checkedInAt, updatedAt: now, voidedAt: null, voidedByUserId: null }).where(eq(attendanceRecords.id, id))
+      else await this.db.insert(attendanceRecords).values({ id, sessionId, projectMemberId: input.projectMemberId, userId: (await this.db.select({ userId: projectMembers.userId }).from(projectMembers).where(eq(projectMembers.id, input.projectMemberId)).limit(1))[0]?.userId ?? null, checkedInAt, method: 'MANUAL', source: 'ADMIN', status: input.status, distanceMeters: null, accuracyMeters: null, locationPassed: null, createdByUserId: actor.userId, voidedAt: null, voidedByUserId: null, updatedAt: now })
+      await this.db.insert(attendanceAuditLogs).values({ id: crypto.randomUUID(), attendanceRecordId: id, operatorUserId: actor.userId, previousStatus: existing?.status ?? null, newStatus: input.status })
+      const row = (await this.db.select().from(attendanceRecords).where(eq(attendanceRecords.id, id)).limit(1))[0]; if (!row) throw toRepositoryError(); return mapAttendance(row)
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async finalizeAttendance(sessionId: string, actor: AuthContext, now = new Date()): Promise<AttendanceLiveResponse> {
+    const session = await this.getSession(sessionId, now); if (!session) throw new RepositoryError('NOT_FOUND', 'Session not found')
+    for (const member of await this.listMembers(session.projectId)) { const exists = (await this.db.select({ id: attendanceRecords.id }).from(attendanceRecords).where(and(eq(attendanceRecords.sessionId, sessionId), eq(attendanceRecords.projectMemberId, member.id))).limit(1))[0]; if (!exists) await this.updateAttendance(sessionId, { projectMemberId: member.id, status: 'ABSENT' }, actor, now) }
+    await this.db.update(eventSessions).set({ attendanceFinalizedAt: now, checkinCloseAt: now }).where(eq(eventSessions.id, sessionId))
+    return this.getLiveAttendance(sessionId, now)
+  }
+  async exportAttendanceCsv(sessionId: string): Promise<string> { const session = await this.getSession(sessionId); if (!session) throw new RepositoryError('NOT_FOUND', 'Session not found'); const records = await this.listAttendance(sessionId); const members = await this.listMembers(session.projectId); const escape = (value: string | null) => `"${(value ?? '').replaceAll('"', '""')}"`; return `\uFEFF${['姓名,学号,班级,课程,日期,应到时间,签到时间,状态,来源', ...records.map((record) => { const member = members.find((item) => item.id === record.projectMemberId); return [member?.displayName ?? '', member?.externalCode ?? '', '', session.projectName, session.scheduledStartAt.slice(0, 10), session.scheduledStartAt, record.checkedInAt, record.status, record.source].map(escape).join(',') })].join('\n')}\n` }
+  async importRoster(semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<{ imported: number }> {
+    void actor
+    try {
+      const semester = (await this.db.select().from(semesterConfigs).where(eq(semesterConfigs.code, semesterCode)).limit(1))[0]
+      if (!semester) throw new RepositoryError('NOT_FOUND', 'Semester configuration is required')
+      let imported = 0
+      await this.db.transaction(async (tx) => {
+        for (const entry of entries) {
+          const classValue = (await tx.select().from(classTable).where(and(eq(classTable.semesterId, semester.id), eq(classTable.classCode, entry.classCode))).limit(1))[0]
+          if (!classValue) throw new RepositoryError('NOT_FOUND', 'Roster references an unknown class')
+          await tx.insert(students).values({ id: crypto.randomUUID(), studentNo: entry.studentNo, displayName: entry.displayName, classId: classValue.id, active: true }).onDuplicateKeyUpdate({ set: { displayName: entry.displayName, classId: classValue.id, active: true } })
+          const student = (await tx.select().from(students).where(eq(students.studentNo, entry.studentNo)).limit(1))[0]
+          if (!student) throw toRepositoryError()
+          const required = await tx.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classValue.id), eq(courses.kind, 'REQUIRED')))
+          for (const item of required) if (item.projectId) {
+            const existing = (await tx.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, item.projectId), eq(projectMembers.externalCode, entry.studentNo))).limit(1))[0]
+            if (existing) await tx.update(projectMembers).set({ displayName: entry.displayName }).where(eq(projectMembers.id, existing.id))
+            else await tx.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: item.projectId, userId: null, displayName: entry.displayName, externalCode: entry.studentNo })
+          }
+          imported += 1
+        }
+      })
+      return { imported }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }> {
+    try {
+      const identity = (await this.db.select().from(userIdentities).where(and(eq(userIdentities.provider, 'WECHAT_MINIPROGRAM'), eq(userIdentities.providerSubject, providerSubject))).limit(1))[0]
+      const userId = identity?.userId ?? crypto.randomUUID(); const displayName = '微信用户'
+      if (!identity) await this.db.transaction(async (tx) => { await tx.insert(users).values({ id: userId, displayName, avatarUrl: null }); await tx.insert(userIdentities).values({ id: crypto.randomUUID(), userId, provider: 'WECHAT_MINIPROGRAM', providerSubject }) })
+      const token = crypto.randomUUID() + crypto.randomUUID()
+      await this.db.insert(miniProgramAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      return { userId, token, displayName }
+    } catch { throw toRepositoryError() }
+  }
+  async resolveMiniProgramSession(token: string): Promise<AuthContext | null> {
+    try {
+      const hash = createHash('sha256').update(token).digest('hex')
+      const row = (await this.db.select({ session: miniProgramAuthSessions, user: users, identity: userIdentities }).from(miniProgramAuthSessions).innerJoin(users, eq(miniProgramAuthSessions.userId, users.id)).innerJoin(userIdentities, and(eq(userIdentities.userId, users.id), eq(userIdentities.provider, 'WECHAT_MINIPROGRAM'))).where(eq(miniProgramAuthSessions.tokenHash, hash)).limit(1))[0]
+      if (!row || row.session.revokedAt || row.session.expiresAt <= new Date()) return null
+      const admin = (await this.db.select({ id: projectAdmins.id }).from(projectAdmins).where(eq(projectAdmins.userId, row.user.id)).limit(1))[0]
+      await this.db.update(miniProgramAuthSessions).set({ lastSeenAt: new Date() }).where(eq(miniProgramAuthSessions.id, row.session.id))
+      return { userId: row.user.id, displayName: row.user.displayName, avatarUrl: row.user.avatarUrl, identityProvider: 'WECHAT_MINIPROGRAM', identitySubject: row.identity.providerSubject, sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: Boolean(admin) } }
+    } catch { throw toRepositoryError() }
+  }
   async upsertAttendancePolicy(projectId: string, input: CreateAttendancePolicyInput): Promise<AttendancePolicy> { try { const id = crypto.randomUUID(); const values = { id, projectId, rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters }; await this.db.insert(attendancePolicies).values(values).onDuplicateKeyUpdate({ set: { rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters } }); const row = (await this.db.select().from(attendancePolicies).where(eq(attendancePolicies.projectId, projectId)).limit(1))[0]; if (!row) throw toRepositoryError(); return mapPolicy(row) } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() } }
 }
 

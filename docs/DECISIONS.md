@@ -75,3 +75,9 @@ Today responses expose `serverTime`. The client computes `serverTime - Date.now(
 `REPOSITORY_MODE=mysql` is protected by an explicit `APP_ENV` target policy. Development accepts only database `u_app` through `127.0.0.1` or `localhost:13306`, which is the developer SSH Tunnel. Production accepts only database `u_app` through `127.0.0.1` or `localhost:3306` (or an omitted MySQL default port), because the Baota-hosted API and MySQL run on the same server. Public database hosts are rejected.
 
 There is no approved independent staging database in the current architecture. `APP_ENV=staging` with MySQL therefore fails closed with an explicit configuration error rather than inheriting development or production rules. A future staging target requires a new reviewed decision and tests before it can be enabled. Production still rejects `REPOSITORY_MODE=memory`, development auth, or a missing `AUTH_SESSION_SECRET` through the existing configuration invariants.
+
+## ADR-019: Fixed semester scope for the first class release
+
+The first usable release models one semester, a small set of classes, fixed course/timetable configuration, and a private MySQL roster. The existing Project, ScheduleRule, EventSession, ProjectMember, and AttendanceRecord tables remain the internal materialization engine. Students bind through a separate provider identity and select only elective courses; real names and student numbers are imported privately and are never versioned in the public repository or client bundle.
+
+The default attendance workflow is an administrator-started NORMAL session. The server owns eligibility, time-window, duplicate, status override, finalization, and CSV export decisions. PASSCODE, LOCATION, dynamic QR, complex roles, and multi-tenant abstractions remain deferred until this loop is used successfully.

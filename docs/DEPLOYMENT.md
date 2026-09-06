@@ -253,7 +253,7 @@ Vercel 前端项目只配置公开 API 地址：
 
 ### 微信 ENV
 
-微信登录尚未接入。未来的 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 只能属于 API server-side environment，不得进入 Taro bundle。
+API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，签发 HttpOnly session cookie。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5/PWA 仍需后续登录方案，不会使用 Dev Auth 冒充生产身份。
 
 ### Casdoor ENV
 
@@ -263,11 +263,30 @@ Casdoor 尚未接入。未来的 `CASDOOR_ISSUER`、`CASDOOR_CLIENT_ID`、`CASDO
 
 下一阶段只做数据库初始化准备与验证，不与本部署 foundation 混在一起：
 
-1. 在 disposable MySQL 8 数据库中从 `packages/db/migrations/0000_clean_baseline.sql` 从零执行，并对照 `packages/db/src/schema.ts`。
+1. 在 disposable MySQL 8 数据库中按顺序从 `0000_clean_baseline.sql`、`0001_exotic_earthquake.sql`、`0002_orange_santa_claus.sql`、`0003_deep_doctor_faustus.sql` 从零执行，并对照 `packages/db/src/schema.ts`。
 2. 重点复核 `users`、`user_identities`、`projects`、`project_members`、`schedule_rules`、`event_sessions`、`attendance_policies`、`attendance_records`，以及 session 幂等所需的唯一约束。
-3. 当前 baseline 已移除从未执行的旧 `0001`–`0003` 重复 DDL；该决策记录在 `docs/DECISIONS.md`，不会在生产发布中自动应用。
+3. 当前链为 clean baseline `0000` 加固定学期/roster/attendance 增量 migration `0001`–`0003`；它们不会在生产发布中自动应用。migration history 和生产现状必须先人工审核。
 4. 先确认 production `u_app` 是否已有项目表；未知时只执行人工 preflight：`SELECT DATABASE();`、`SHOW TABLES;`，不要自动迁移。
 5. 确认数据库名称、账号权限、备份/回滚方案和 `DATABASE_URL`。人工批准后才运行一次 `pnpm db:migrate`，并保存 migration history。
 6. 以 `REPOSITORY_MODE=mysql` 启动 API，创建测试 Project/Rule/Session，重启宝塔 Node 项目后验证数据仍存在。
 
 在 M3.5 完成前，不把生产 persistence 或签到能力标记为完成。
+
+## 固定学期与 roster
+
+班级日常使用不再要求管理员逐个创建 Project、ScheduleRule、Session。管理员使用无真实个人信息的 Semester Config 同步课程和固定课表；课程会复用现有 Project/EventSession engine。真实 roster 只进入 MySQL，不进入 GitHub 或前端 bundle。
+
+CSV 仅允许以下列：
+
+```text
+class_code,student_no,display_name
+```
+
+将文件放在被 `.gitignore` 忽略的 `private-data/` 下，完成数据库人工批准和 migration 后，在服务器或受控开发机执行：
+
+```bash
+APP_ENV=development DATABASE_URL='mysql://user:password@127.0.0.1:13306/u_app' \
+pnpm db:import-roster --file private-data/class.roster.csv --semester 2026-fall
+```
+
+生产导入还需要 `NODE_ENV=production` 与一次性人工确认变量 `ROSTER_IMPORT_CONFIRM=u_app-production`。命令只输出导入数量，不输出姓名、学号或 provider subject。生产发布 workflow 不会导入 roster，也不会执行 migration。

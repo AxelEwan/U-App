@@ -1,7 +1,7 @@
-import { Text, View } from '@tarojs/components'
+import { Input, Picker, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
-import type { SessionSummary, TodayResponse } from '@qzu/contracts'
+import type { OnboardingResponse, SessionSummary, TodayResponse } from '@qzu/contracts'
 
 import { useCountdown } from '../../hooks/useCountdown'
 import { useSessionStatus } from '../../hooks/useSessionStatus'
@@ -57,17 +57,32 @@ export function HomeEmpty() {
   return <View className="empty-state"><Text className="empty-title">今天没有课程</Text><Text className="empty-copy">新的课程安排会在这里出现，今天先好好休息。</Text></View>
 }
 
+function StudentOnboarding({ value, onChange }: { readonly value: OnboardingResponse; readonly onChange: (next: OnboardingResponse) => void }) {
+  const { apiRepository } = useMock()
+  const [classId, setClassId] = useState(value.classOptions[0]?.id ?? '')
+  const [displayName, setDisplayName] = useState('')
+  const [last4, setLast4] = useState('')
+  const [selected, setSelected] = useState(value.selectedCourseIds[0] ?? value.electiveCourses[0]?.id ?? '')
+  const [busy, setBusy] = useState(false)
+  const verify = async () => { setBusy(true); try { onChange(await apiRepository.verifyStudent({ classId, displayName, studentNoLast4: last4 })) } finally { setBusy(false) } }
+  const enroll = async () => { setBusy(true); try { onChange(await apiRepository.enrollElectives({ courseIds: selected ? [selected] : [] })) } finally { setBusy(false) } }
+  return <View className="card"><Text className="tag tag-primary">首次进入</Text><Text className="card-title" style={{ marginTop: 10 }}>绑定班级与学生身份</Text>{value.status === 'NEEDS_BINDING' ? <><Text className="card-meta">请选择班级，输入姓名和学号后四位完成一次性校验。</Text><Picker mode="selector" range={value.classOptions.map((item) => item.name)} value={Math.max(0, value.classOptions.findIndex((item) => item.id === classId))} onChange={(event) => setClassId(value.classOptions[Number(event.detail.value)]?.id ?? '')}><View className="primary-button">{value.classOptions.find((item) => item.id === classId)?.name ?? '选择班级'}</View></Picker><Input className="text-input" placeholder="姓名" value={displayName} onInput={(event) => setDisplayName(event.detail.value)} /><Input className="text-input" type="number" maxlength={4} placeholder="学号后四位" value={last4} onInput={(event) => setLast4(event.detail.value)} /><View className="primary-button" onClick={() => { if (!busy) void verify() }}>{busy ? '校验中…' : '绑定身份'}</View></> : <><Text className="card-meta">请选择本学期的选修课。</Text><Picker mode="selector" range={value.electiveCourses.map((item) => item.name)} value={Math.max(0, value.electiveCourses.findIndex((item) => item.id === selected))} onChange={(event) => setSelected(value.electiveCourses[Number(event.detail.value)]?.id ?? '')}><View className="primary-button">{value.electiveCourses.find((item) => item.id === selected)?.name ?? '选择选修课'}</View></Picker><View className="primary-button" onClick={() => { if (!busy) void enroll() }}>{busy ? '保存中…' : '完成选课'}</View></>}</View>
+}
+
 export default function HomeDashboard() {
   const { apiRepository } = useMock()
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [clockOffset, setClockOffset] = useState(0)
   const [error, setError] = useState(false)
+  const [onboarding, setOnboarding] = useState<OnboardingResponse | null>(null)
   const refreshToday = async () => { const value = await apiRepository.getToday(); setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) }
   useEffect(() => {
     let active = true
     void apiRepository.getToday().then((value) => { if (active) { setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) } }).catch(() => { if (active) setError(true) })
     return () => { active = false }
   }, [apiRepository])
+  useEffect(() => { void apiRepository.getOnboarding().then((value) => { if (value.classOptions.length && value.status !== 'READY') setOnboarding(value) }).catch(() => undefined) }, [apiRepository])
+  if (onboarding) return <StudentOnboarding value={onboarding} onChange={setOnboarding} />
   if (error) return <View className="empty-state"><Text className="empty-title">暂时无法读取今日安排</Text><Text className="empty-copy">请确认本地 API 已启动。</Text></View>
   if (!today) return <View className="card"><Text className="card-meta">正在读取今日安排…</Text></View>
   const list = today.todaySessions
