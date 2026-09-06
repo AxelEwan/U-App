@@ -167,36 +167,49 @@ curl --fail http://127.0.0.1:3004/health
 curl --fail https://api-u.x-lab.top/health
 ```
 
-## 更新流程
+## 自动更新流程
 
-代码推送到 GitHub 后，在服务器现有 checkout 中执行：
+标准生产发布由 `.github/workflows/deploy-api.yml` 完成。向 `main` push 后，流程必须先等待同一次 push 对应的 `CI` 成功，再部署该次 CI 的完整 40 位 commit SHA：
 
 ```text
-GitHub push
+GitHub push main
     ↓
-服务器 git pull
+CI
     ↓
-pnpm install --frozen-lockfile
+Deploy API Production
     ↓
-pnpm --filter @qzu/api build
+checkout pinned release SHA
     ↓
-宝塔 Node 项目重启
+上传 u-app-${RELEASE_SHA}.tar.gz
+    ↓
+服务器 deploy entry
+    ↓
+服务器安装依赖、构建 API、重启宝塔 u_app
+    ↓
+http://127.0.0.1:3004/health
+    ↓
+https://api-u.x-lab.top/health
 ```
 
-对应命令：
+workflow 使用以下 GitHub Actions secrets，不要把值写入仓库或文档：
+
+- `UAPP_DEPLOY_HOST`
+- `UAPP_DEPLOY_PORT`
+- `UAPP_DEPLOY_USER`
+- `UAPP_DEPLOY_SSH_KEY`
+- `UAPP_DEPLOY_KNOWN_HOSTS`
+
+服务器接收目标固定为 `/var/lib/u-app-deploy/incoming/${RELEASE_SHA}.tar.gz`，上传后只调用：
 
 ```bash
-cd /www/wwwroot/u-app
-git pull --ff-only origin main
-corepack prepare pnpm@10.34.5 --activate
-pnpm install --frozen-lockfile
-pnpm --filter @qzu/api build
-test -f apps/api/dist/server.cjs
+sudo /usr/local/sbin/u-app-deploy "$RELEASE_SHA" "/var/lib/u-app-deploy/incoming/${RELEASE_SHA}.tar.gz"
 ```
 
-构建失败时不要重启线上 API。确认构建成功后，在宝塔 Node 项目管理中点击重启，由宝塔托管的 PM2 进程加载新的 `dist/server.cjs` 和 `/etc/u-app/api-production.env`。
+GitHub Actions 不直接执行 `git pull`、`pnpm install`、`pnpm build`、`pm2 restart` 或任何数据库修改；这些动作全部由服务器 `/usr/local/libexec/u-app/deploy-api-production.sh` 和宝塔 `u_app` Node 项目负责。当前发布流程禁止自动 migration，不能执行 `pnpm db:migrate`。
 
-本流程不使用 systemd、Docker、自定义守护脚本、`pm2 ecosystem` 或 force push。
+workflow 的 SSH 连接强制 `BatchMode=yes`、`StrictHostKeyChecking=yes` 和指定的 `UserKnownHostsFile`，不接受 `StrictHostKeyChecking=no`。并发组为 `u-app-api-production`，不取消正在进行的生产发布。
+
+如需人工发布，可在 GitHub Actions 中手动运行 `Deploy API Production`；workflow_dispatch 同样会校验实际 checkout 的完整 40 位 SHA。常规发布不使用 systemd、Docker、自定义守护脚本、`pm2 ecosystem` 或 force push。
 
 ## 环境变量归属
 

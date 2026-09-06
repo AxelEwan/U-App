@@ -48,5 +48,5 @@ export function assertSafeDatabaseTarget(env: DatabaseTargetEnv): void {
     invalidTarget('MySQL staging database target is not configured')
   }
 
-  invalidTarget(`Unsupported APP_ENV for MySQL repository mode: ${env.APP_ENV}`)
+  invalidTarget('Unsupported APP_ENV for MySQL repository mode')
 }

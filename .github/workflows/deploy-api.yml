@@ -1,0 +1,121 @@
+name: Deploy API Production
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u-app-api-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout the approved commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 1
+
+      - name: Resolve and verify release SHA
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          MANUAL_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          release_sha="$(git rev-parse HEAD)"
+          [[ "$release_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$EVENT_NAME" == 'workflow_run' ]]; then
+            [[ "$release_sha" == "$WORKFLOW_RUN_HEAD_SHA" ]]
+          else
+            [[ "$release_sha" == "$MANUAL_SHA" ]]
+          fi
+          printf 'sha=%s\n' "$release_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Package the pinned source release
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          tar \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='dist' \
+            --exclude='.turbo' \
+            -czf "$RUNNER_TEMP/u-app-${RELEASE_SHA}.tar.gz" .
+
+      - name: Configure pinned SSH host key
+        shell: bash
+        env:
+          UAPP_DEPLOY_HOST: ${{ secrets.UAPP_DEPLOY_HOST }}
+          UAPP_DEPLOY_PORT: ${{ secrets.UAPP_DEPLOY_PORT }}
+          UAPP_DEPLOY_SSH_KEY: ${{ secrets.UAPP_DEPLOY_SSH_KEY }}
+          UAPP_DEPLOY_KNOWN_HOSTS: ${{ secrets.UAPP_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          : "${UAPP_DEPLOY_HOST:?UAPP_DEPLOY_HOST is required}"
+          : "${UAPP_DEPLOY_PORT:?UAPP_DEPLOY_PORT is required}"
+          : "${UAPP_DEPLOY_SSH_KEY:?UAPP_DEPLOY_SSH_KEY is required}"
+          : "${UAPP_DEPLOY_KNOWN_HOSTS:?UAPP_DEPLOY_KNOWN_HOSTS is required}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$UAPP_DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$UAPP_DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          host_key_target="$UAPP_DEPLOY_HOST"
+          if [[ "$UAPP_DEPLOY_PORT" != '22' ]]; then
+            host_key_target="[$UAPP_DEPLOY_HOST]:$UAPP_DEPLOY_PORT"
+          fi
+          ssh-keygen -F "$host_key_target" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+      - name: Upload and deploy the pinned release
+        shell: bash
+        env:
+          UAPP_DEPLOY_HOST: ${{ secrets.UAPP_DEPLOY_HOST }}
+          UAPP_DEPLOY_PORT: ${{ secrets.UAPP_DEPLOY_PORT }}
+          UAPP_DEPLOY_USER: ${{ secrets.UAPP_DEPLOY_USER }}
+          RELEASE_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -Eeuo pipefail
+          : "${UAPP_DEPLOY_HOST:?UAPP_DEPLOY_HOST is required}"
+          : "${UAPP_DEPLOY_PORT:?UAPP_DEPLOY_PORT is required}"
+          : "${UAPP_DEPLOY_USER:?UAPP_DEPLOY_USER is required}"
+          archive="$RUNNER_TEMP/u-app-${RELEASE_SHA}.tar.gz"
+          remote_archive="/var/lib/u-app-deploy/incoming/${RELEASE_SHA}.tar.gz"
+          ssh_options=(
+            -i "$HOME/.ssh/id_ed25519"
+            -p "$UAPP_DEPLOY_PORT"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+          )
+          scp -O -i "$HOME/.ssh/id_ed25519" -P "$UAPP_DEPLOY_PORT" \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$archive" \
+            "$UAPP_DEPLOY_USER@$UAPP_DEPLOY_HOST:$remote_archive"
+          ssh "${ssh_options[@]}" "$UAPP_DEPLOY_USER@$UAPP_DEPLOY_HOST" \
+            sudo /usr/local/sbin/u-app-deploy "$RELEASE_SHA" "$remote_archive"
+
+      - name: Verify public API health
+        shell: bash
+        run: curl --fail --silent --show-error --retry 5 --retry-delay 2 --max-time 10 https://api-u.x-lab.top/health
