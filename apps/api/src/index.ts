@@ -3,6 +3,7 @@ import { loadApiEnv, parseCorsOrigins } from '@qzu/config'
 
 import { createApp } from './app'
 import { loadApiLocalEnv } from './env'
+import { createMySqlRepository } from './mysql-repository'
 
 loadApiLocalEnv()
 const env = loadApiEnv()
@@ -18,8 +19,8 @@ function assertSafeDevelopmentDatabase(databaseUrl: string): void {
 
 if (env.REPOSITORY_MODE === 'mysql' && env.DATABASE_URL) assertSafeDevelopmentDatabase(env.DATABASE_URL)
 
-const repository = env.REPOSITORY_MODE === 'mysql' && env.DATABASE_URL
-  ? (await import('./mysql-repository')).createMySqlRepository(env.DATABASE_URL)
+const repository = env.REPOSITORY_MODE === 'mysql'
+  ? createMySqlRepository(env.DATABASE_URL!)
   : undefined
 const app = createApp({
   corsOrigins: parseCorsOrigins(env.CORS_ORIGINS),

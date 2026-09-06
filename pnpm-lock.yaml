@@ -76,9 +76,9 @@ importers:
         specifier: 4.13.7
         version: 4.13.7
     devDependencies:
-      tsup:
-        specifier: 8.5.1
-        version: 8.5.1(@swc/core@1.3.96(@swc/helpers@0.5.23))(jiti@2.7.0)(postcss@8.5.28)(tsx@4.20.6)(typescript@5.9.3)
+      esbuild:
+        specifier: 0.25.12
+        version: 0.25.12
       tsx:
         specifier: 4.20.6
         version: 4.20.6

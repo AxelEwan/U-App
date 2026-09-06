@@ -3,7 +3,8 @@ import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
 
-const API_BASE_URL = process.env.TARO_ENV === 'weapp' ? 'http://127.0.0.1:3004' : 'http://localhost:3004'
+const API_BASE_URL = process.env.TARO_APP_API_BASE_URL
+  ?? (process.env.TARO_ENV === 'weapp' ? 'http://127.0.0.1:3004' : 'http://localhost:3004')
 interface ListResponse<T> { readonly items: T[] }
 
 export class ApiRepository implements ClientRepository {
