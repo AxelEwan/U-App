@@ -2,22 +2,13 @@ import { serve } from '@hono/node-server'
 import { loadApiEnv, parseCorsOrigins } from '@qzu/config'
 
 import { createApp } from './app'
+import { assertSafeDatabaseTarget } from './database-target'
 import { loadApiLocalEnv } from './env'
 import { createMySqlRepository } from './mysql-repository'
 
 loadApiLocalEnv()
 const env = loadApiEnv()
-function assertSafeDevelopmentDatabase(databaseUrl: string): void {
-  try {
-    const url = new URL(databaseUrl)
-    const databaseName = url.pathname.replace(/^\//, '').split('/').pop()
-    if (databaseName !== 'u_app' || !['127.0.0.1', 'localhost'].includes(url.hostname) || url.port !== '13306') throw new Error('DATABASE_URL must target the local u_app SSH tunnel')
-  } catch {
-    throw new Error('DATABASE_URL must target the local u_app SSH tunnel')
-  }
-}
-
-if (env.REPOSITORY_MODE === 'mysql' && env.DATABASE_URL) assertSafeDevelopmentDatabase(env.DATABASE_URL)
+assertSafeDatabaseTarget(env)
 
 const repository = env.REPOSITORY_MODE === 'mysql'
   ? createMySqlRepository(env.DATABASE_URL!)

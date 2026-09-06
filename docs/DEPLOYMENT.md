@@ -79,7 +79,28 @@ chown www:www /etc/u-app/api-production.env
 chmod 600 /etc/u-app/api-production.env
 ```
 
-### 3. 数据库 migration 门禁
+### 3. 数据库目标按环境区分
+
+本地开发 API 通过 SSH Tunnel 访问服务器 MySQL：
+
+```dotenv
+APP_ENV=development
+REPOSITORY_MODE=mysql
+DATABASE_URL=mysql://user:password@127.0.0.1:13306/u_app
+```
+
+生产 API 与 MySQL 位于同一台服务器，不使用 SSH Tunnel：
+
+```dotenv
+NODE_ENV=production
+APP_ENV=production
+REPOSITORY_MODE=mysql
+DATABASE_URL=mysql://user:password@127.0.0.1:3306/u_app
+```
+
+生产也可以使用 `localhost:3306`，或省略端口使用 MySQL 默认端口。生产禁止公网数据库地址。当前没有独立 staging 数据库目标，`APP_ENV=staging` 配置 MySQL 会 fail closed，不会静默套用 development 或 production 规则。
+
+### 4. 数据库 migration 门禁
 
 本阶段不执行 migration。数据库初始化必须作为下一阶段 M3.5 的独立、人工确认操作完成。
 
@@ -92,7 +113,7 @@ SHOW TABLES;
 
 如果数据库不存在、目标不明确或不是已确认的专用数据库，立即停止，不执行 migration。当前仓库的安全 migration 命令仍有开发数据库保护条件，不能在生产环境绕过保护直接运行。
 
-### 4. 构建 API
+### 5. 构建 API
 
 在 workspace 根目录执行：
 
@@ -108,7 +129,7 @@ test -f apps/api/dist/server.cjs
 pnpm build
 ```
 
-### 5. 配置并启动宝塔 Node 项目
+### 6. 配置并启动宝塔 Node 项目
 
 在宝塔 Node 项目管理中创建或配置一个项目，使用以下值：
 

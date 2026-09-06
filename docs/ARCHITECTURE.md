@@ -19,11 +19,11 @@ The client UI uses repository interfaces for projects, sessions, today data, Sch
 
 ## Data and time
 
-MySQL 8 is reached locally only through a developer-established SSH tunnel at `127.0.0.1:13306`. The repository never knows SSH host credentials. Schedule rules contain local dates/times and an IANA timezone. Materialization uses a timezone library and stores generated event session instants as UTC.
+Development API access to MySQL 8 uses a developer-established SSH tunnel at `127.0.0.1:13306`; the repository never knows SSH host credentials. Production API access uses the same-server MySQL instance at `127.0.0.1:3306` or `localhost` with the default MySQL port. Schedule rules contain local dates/times and an IANA timezone. Materialization uses a timezone library and stores generated event session instants as UTC.
 
 The database separates `web_auth_sessions` and `mini_program_auth_sessions` from business `event_sessions`. Opaque session tokens are returned only once; only their SHA-256 hashes are stored. UUIDs are internal identifiers.
 
-`REPOSITORY_MODE=memory` is explicit review/test mode. `REPOSITORY_MODE=mysql` requires `DATABASE_URL` and accepts only the local `u_app` SSH tunnel; a MySQL error becomes `DATABASE_UNAVAILABLE` and never falls back to memory. `apps/api/.env.local` is loaded server-side and ignored by Git.
+`REPOSITORY_MODE=memory` is explicit review/test mode. `REPOSITORY_MODE=mysql` requires `DATABASE_URL` and is checked against the `APP_ENV` boundary: development accepts only the local `u_app` SSH tunnel, production accepts only same-server `u_app` MySQL, and staging fails closed until a separate target is approved. A MySQL error becomes `DATABASE_UNAVAILABLE` and never falls back to memory. `apps/api/.env.local` is loaded server-side and ignored by Git.
 
 ## Request boundary
 
@@ -31,7 +31,7 @@ API requests receive a request ID, strict-origin CORS handling, schema validatio
 
 ## Deployment compatibility
 
-The H5 and admin builds are compatible with later Vercel deployment. The bundled Node API is compatible with Nginx -> `127.0.0.1:3004` -> systemd. CI verifies but does not deploy. Redis is intentionally absent from Phase 1.
+The H5 and admin builds are compatible with later Vercel deployment. The bundled Node API is compatible with Baota Node Project -> PM2 -> `127.0.0.1:3004`. CI verifies but does not deploy. Redis is intentionally absent from Phase 1.
 
 ## M3 API surface
 

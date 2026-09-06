@@ -69,3 +69,9 @@ Schedule Rules remain editable definitions while Event Sessions are independent 
 ## ADR-017: Server clock contract
 
 Today responses expose `serverTime`. The client computes `serverTime - Date.now()` once per response and uses the adjusted clock for countdown/status presentation; eligibility remains a future API-only decision.
+
+## ADR-018: Environment-specific database target guards
+
+`REPOSITORY_MODE=mysql` is protected by an explicit `APP_ENV` target policy. Development accepts only database `u_app` through `127.0.0.1` or `localhost:13306`, which is the developer SSH Tunnel. Production accepts only database `u_app` through `127.0.0.1` or `localhost:3306` (or an omitted MySQL default port), because the Baota-hosted API and MySQL run on the same server. Public database hosts are rejected.
+
+There is no approved independent staging database in the current architecture. `APP_ENV=staging` with MySQL therefore fails closed with an explicit configuration error rather than inheriting development or production rules. A future staging target requires a new reviewed decision and tests before it can be enabled. Production still rejects `REPOSITORY_MODE=memory`, development auth, or a missing `AUTH_SESSION_SECRET` through the existing configuration invariants.
