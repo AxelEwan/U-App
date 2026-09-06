@@ -52,7 +52,7 @@ Attendance business statuses are `PRESENT`, `LATE`, `LEAVE`, and `ABSENT`; sourc
 
 ## ADR-013: Repository adapters and development database guard
 
-Client and API consumers depend on repository interfaces rather than calling HTTP or SQL from UI components. `ApiRepository` can replace the fictional Mock Repository without changing the product UI. The API uses memory data only with `REPOSITORY_MODE=memory`; MySQL mode requires the local `u_app` tunnel. Migrations remain generated artifacts until the guarded preflight confirms the target and existing tables.
+Client and API consumers depend on repository interfaces rather than calling HTTP or SQL from UI components. `ApiRepository` can replace the fictional Mock Repository without changing the product UI. The API uses memory data only with `REPOSITORY_MODE=memory`; MySQL mode uses an environment-specific `u_app` target: the local SSH tunnel in development and same-server loopback MySQL in production. Migrations remain generated artifacts until the guarded preflight confirms the target and existing tables.
 
 ## ADR-014: Explicit M3 persistence mode
 
