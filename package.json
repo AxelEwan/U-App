@@ -17,6 +17,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json --pretty false && pnpm --recursive --if-present typecheck",
     "db:generate": "pnpm --filter @qzu/db db:generate",
+    "db:migrate": "node packages/db/scripts/migrate-safe.mjs",
     "db:migrate:safe": "node packages/db/scripts/migrate-safe.mjs"
   },
   "devDependencies": {

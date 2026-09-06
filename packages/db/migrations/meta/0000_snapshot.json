@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "23fc9f04-b731-4cb7-8624-a067b94fbb2e",
+  "id": "7e96c3a2-32de-4cfa-acee-fe836e65885a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "attendance_field_values": {
@@ -125,6 +125,22 @@
           "autoincrement": false,
           "default": "'ROSTER'"
         },
+        "check_in_open_minutes_before": {
+          "name": "check_in_open_minutes_before",
+          "type": "int unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 15
+        },
+        "check_in_close_minutes_after": {
+          "name": "check_in_close_minutes_after",
+          "type": "int unsigned",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 15
+        },
         "require_location": {
           "name": "require_location",
           "type": "boolean",
@@ -140,6 +156,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
+        },
+        "location_name": {
+          "name": "location_name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "center_latitude": {
           "name": "center_latitude",
@@ -256,7 +279,7 @@
           "name": "checked_in_at",
           "type": "timestamp(3)",
           "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         },
         "method": {
@@ -266,9 +289,16 @@
           "notNull": true,
           "autoincrement": false
         },
+        "source": {
+          "name": "source",
+          "type": "enum('SELF_CHECKIN','ADMIN')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "status": {
           "name": "status",
-          "type": "enum('PRESENT','LATE','VOID')",
+          "type": "enum('PRESENT','LATE','LEAVE','ABSENT')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -297,6 +327,35 @@
         },
         "created_at": {
           "name": "created_at",
+          "type": "timestamp(3)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "created_by_user_id": {
+          "name": "created_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "voided_at": {
+          "name": "voided_at",
+          "type": "timestamp(3)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "voided_by_user_id": {
+          "name": "voided_by_user_id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
           "type": "timestamp(3)",
           "primaryKey": false,
           "notNull": true,
@@ -355,6 +414,32 @@
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "attendance_records_created_by_user_id_users_id_fk": {
+          "name": "attendance_records_created_by_user_id_users_id_fk",
+          "tableFrom": "attendance_records",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "attendance_records_voided_by_user_id_users_id_fk": {
+          "name": "attendance_records_voided_by_user_id_users_id_fk",
+          "tableFrom": "attendance_records",
+          "tableTo": "users",
+          "columnsFrom": [
+            "voided_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -580,6 +665,14 @@
             "schedule_rule_id"
           ],
           "isUnique": false
+        },
+        "event_sessions_rule_start_uq": {
+          "name": "event_sessions_rule_start_uq",
+          "columns": [
+            "schedule_rule_id",
+            "scheduled_start_at"
+          ],
+          "isUnique": true
         }
       },
       "foreignKeys": {
@@ -1365,6 +1458,20 @@
           "type": "varchar(36)",
           "primaryKey": false,
           "notNull": true,
+          "autoincrement": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "varchar(120)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "avatar_url": {
+          "name": "avatar_url",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false,
           "autoincrement": false
         },
         "created_at": {

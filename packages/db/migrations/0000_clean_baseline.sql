@@ -13,8 +13,11 @@ CREATE TABLE `attendance_policies` (
 	`id` varchar(36) NOT NULL,
 	`project_id` varchar(36) NOT NULL,
 	`roster_mode` enum('ROSTER','FREE_FORM','MIXED') NOT NULL DEFAULT 'ROSTER',
+	`check_in_open_minutes_before` int unsigned NOT NULL DEFAULT 15,
+	`check_in_close_minutes_after` int unsigned NOT NULL DEFAULT 15,
 	`require_location` boolean NOT NULL DEFAULT false,
 	`require_passcode` boolean NOT NULL DEFAULT false,
+	`location_name` varchar(255),
 	`center_latitude` decimal(10,7),
 	`center_longitude` decimal(10,7),
 	`radius_meters` int unsigned,
@@ -30,13 +33,18 @@ CREATE TABLE `attendance_records` (
 	`session_id` varchar(36) NOT NULL,
 	`project_member_id` varchar(36) NOT NULL,
 	`user_id` varchar(36),
-	`checked_in_at` timestamp(3) NOT NULL,
+	`checked_in_at` timestamp(3),
 	`method` enum('MANUAL','PASSCODE','LOCATION','COMBINED') NOT NULL,
-	`status` enum('PRESENT','LATE','VOID') NOT NULL DEFAULT 'PRESENT',
+	`source` enum('SELF_CHECKIN','ADMIN') NOT NULL,
+	`status` enum('PRESENT','LATE','LEAVE','ABSENT') NOT NULL DEFAULT 'PRESENT',
 	`distance_meters` decimal(10,2),
 	`accuracy_meters` decimal(10,2),
 	`location_passed` boolean,
 	`created_at` timestamp(3) NOT NULL DEFAULT (now()),
+	`created_by_user_id` varchar(36),
+	`voided_at` timestamp(3),
+	`voided_by_user_id` varchar(36),
+	`updated_at` timestamp(3) NOT NULL DEFAULT (now()),
 	CONSTRAINT `attendance_records_id` PRIMARY KEY(`id`),
 	CONSTRAINT `attendance_records_session_member_uq` UNIQUE(`session_id`,`project_member_id`)
 );
@@ -67,7 +75,8 @@ CREATE TABLE `event_sessions` (
 	`status` enum('SCHEDULED','CANCELLED','COMPLETED') NOT NULL DEFAULT 'SCHEDULED',
 	`created_at` timestamp(3) NOT NULL DEFAULT (now()),
 	`updated_at` timestamp(3) NOT NULL DEFAULT (now()),
-	CONSTRAINT `event_sessions_id` PRIMARY KEY(`id`)
+	CONSTRAINT `event_sessions_id` PRIMARY KEY(`id`),
+	CONSTRAINT `event_sessions_rule_start_uq` UNIQUE(`schedule_rule_id`,`scheduled_start_at`)
 );
 --> statement-breakpoint
 CREATE TABLE `mini_program_auth_sessions` (
@@ -157,6 +166,8 @@ CREATE TABLE `user_identities` (
 --> statement-breakpoint
 CREATE TABLE `users` (
 	`id` varchar(36) NOT NULL,
+	`display_name` varchar(120) NOT NULL,
+	`avatar_url` varchar(500),
 	`created_at` timestamp(3) NOT NULL DEFAULT (now()),
 	`updated_at` timestamp(3) NOT NULL DEFAULT (now()),
 	CONSTRAINT `users_id` PRIMARY KEY(`id`)
@@ -196,6 +207,8 @@ ALTER TABLE `attendance_policies` ADD CONSTRAINT `attendance_policies_project_id
 ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_session_id_event_sessions_id_fk` FOREIGN KEY (`session_id`) REFERENCES `event_sessions`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_project_member_id_project_members_id_fk` FOREIGN KEY (`project_member_id`) REFERENCES `project_members`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_user_id_users_id_fk` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_created_by_user_id_users_id_fk` FOREIGN KEY (`created_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_voided_by_user_id_users_id_fk` FOREIGN KEY (`voided_by_user_id`) REFERENCES `users`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `custom_field_definitions` ADD CONSTRAINT `custom_field_definitions_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `event_sessions` ADD CONSTRAINT `event_sessions_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `event_sessions` ADD CONSTRAINT `event_sessions_schedule_rule_id_schedule_rules_id_fk` FOREIGN KEY (`schedule_rule_id`) REFERENCES `schedule_rules`(`id`) ON DELETE set null ON UPDATE no action;--> statement-breakpoint

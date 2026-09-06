@@ -60,7 +60,7 @@ Client and API consumers depend on repository interfaces rather than calling HTT
 
 ## ADR-015: Guarded migration preflight
 
-`pnpm db:migrate:safe` parses the local URL, requires database `u_app` over `127.0.0.1:13306`, runs `SELECT DATABASE()` and `SHOW TABLES`, and stops on unexplained tables before invoking Drizzle. The schema changes remain in `0000`, `0001`, and generated `0002`; no remote database has been migrated by this milestone.
+`pnpm db:migrate` parses `DATABASE_URL` from the process environment or local env file, requires database `u_app` over a loopback target appropriate to `APP_ENV`, runs `SELECT DATABASE()` and `SHOW TABLES`, and stops on unexplained or pre-existing non-migration tables before invoking Drizzle. Development uses `127.0.0.1:13306`; production requires explicit `NODE_ENV=production`, `APP_ENV=production`, and `MIGRATION_CONFIRM=u_app-production` for `127.0.0.1:3306`/default MySQL. The former `0001`/`0002` chain was replaced by a generated clean baseline because `0002` duplicated DDL; no remote database has been migrated.
 
 ## ADR-016: Materialized session idempotency
 

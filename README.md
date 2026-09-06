@@ -31,7 +31,7 @@ If DevTools reports that `app.json` is missing, run the Weapp build first and ve
 Application code reads only `DATABASE_URL`. Start the SSH tunnel separately, forwarding local `127.0.0.1:13306` to the development MySQL service's `127.0.0.1:3306`; the tunnel host/user/password are never part of this repository. Put the real server-only values in **`F:\U-app\apps\api\.env.local`**, which is ignored by Git. Set `REPOSITORY_MODE=mysql` there to opt into persistence. Use the local tunnel URL with database name `u_app`; do not use a public MySQL endpoint.
 
 `pnpm db:generate` generates SQL migrations from the Drizzle schema. It does not connect to or migrate a database.
-`pnpm db:migrate:safe` is the only migration entry point. It refuses missing credentials, non-`u_app` databases, non-tunnel URLs, and unexplained existing tables. Review the SQL and preflight output before applying it.
+`pnpm db:migrate` is the guarded migration entry point (with `pnpm db:migrate:safe` retained as an alias). It accepts `DATABASE_URL`, refuses missing credentials, non-`u_app` databases, unsafe non-loopback targets, unexplained existing tables, and production runs without explicit confirmation. Review the SQL and preflight output before applying it. The current unapplied migration is `packages/db/migrations/0000_clean_baseline.sql`.
 
 The API reads `apps/api/.env.local` automatically. Start it with `pnpm dev:api`; Admin is `pnpm dev:admin`; H5 is `pnpm dev:client:h5`; Weapp is `pnpm dev:client:weapp`, then open **`F:\U-app\apps\client\dist`** in WeChat DevTools.
 

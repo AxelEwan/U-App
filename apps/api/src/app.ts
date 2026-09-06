@@ -51,7 +51,7 @@ function resolveAuth(request: Request, enabled: boolean): AuthContext | null {
   if (!enabled) return null
   const key = request.headers.get('X-Dev-User') as keyof typeof DEV_USERS | null
   const user = key ? DEV_USERS[key] : undefined
-  return user ? { userId: user.userId, identityProvider: 'DEV', sessionType: 'DEV', capabilities: { canManageProjects: user.canManageProjects } } : null
+  return user ? { userId: user.userId, displayName: user.displayName, identityProvider: 'DEV', sessionType: 'DEV', capabilities: { canManageProjects: user.canManageProjects } } : null
 }
 
 function adminContext(request: Request, enabled: boolean): Promise<AuthContext> {

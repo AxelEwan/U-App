@@ -7,6 +7,8 @@ export interface AuthCapabilities {
 
 export interface AuthContext {
   readonly userId: string
+  readonly displayName?: string
+  readonly avatarUrl?: string | null
   readonly identityProvider: IdentityProvider
   readonly sessionType: SessionType
   readonly capabilities: AuthCapabilities

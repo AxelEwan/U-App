@@ -5,29 +5,8 @@
     {
       "idx": 0,
       "version": "5",
-      "when": 1788580330928,
-      "tag": "0000_flippant_blackheart",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1788592147380,
-      "tag": "0001_certain_annihilus",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1788622466076,
-      "tag": "0002_ordinary_franklin_richards",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1788623060025,
-      "tag": "0003_sweet_eddie_brock",
+      "when": 1788693294230,
+      "tag": "0000_clean_baseline",
       "breakpoints": true
     }
   ]

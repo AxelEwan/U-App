@@ -1,2 +1,0 @@
-ALTER TABLE `attendance_policies` ADD `location_name` varchar(255);--> statement-breakpoint
-ALTER TABLE `event_sessions` ADD CONSTRAINT `event_sessions_rule_start_uq` UNIQUE(`schedule_rule_id`,`scheduled_start_at`);

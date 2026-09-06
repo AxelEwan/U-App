@@ -42,7 +42,7 @@ export class MySqlBusinessRepository implements BusinessRepository {
       const value = input
       const projectId = crypto.randomUUID()
       await this.db.transaction(async (tx) => {
-        await tx.insert(users).values({ id: actor.userId }).onDuplicateKeyUpdate({ set: { id: actor.userId } })
+        await tx.insert(users).values({ id: actor.userId, displayName: actor.displayName ?? actor.userId, avatarUrl: actor.avatarUrl ?? null }).onDuplicateKeyUpdate({ set: { displayName: actor.displayName ?? actor.userId, avatarUrl: actor.avatarUrl ?? null } })
         await tx.insert(projects).values({ id: projectId, name: value.name, description: value.description ?? null, type: value.type, timezone: value.timezone, effectiveStartDate: value.effectiveStartDate, effectiveEndDate: value.effectiveEndDate ?? null, status: 'DRAFT', createdBy: actor.userId })
         await tx.insert(projectAdmins).values({ id: crypto.randomUUID(), projectId, userId: actor.userId, role: 'OWNER' }).onDuplicateKeyUpdate({ set: { role: 'OWNER' } })
       })

@@ -26,6 +26,8 @@ const updatedAt = timestamp('updated_at', { mode: 'date', fsp: 3 })
 
 export const users = mysqlTable('users', {
   id: uuid('id').primaryKey(),
+  displayName: varchar('display_name', { length: 120 }).notNull(),
+  avatarUrl: varchar('avatar_url', { length: 500 }),
   createdAt,
   updatedAt,
 })
