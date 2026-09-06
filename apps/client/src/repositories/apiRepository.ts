@@ -1,4 +1,4 @@
-import type { AttendancePolicy, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse } from '@qzu/contracts'
 import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
@@ -35,21 +35,23 @@ export class ApiRepository implements ClientRepository {
   async listScheduleRules(projectId: string): Promise<readonly ScheduleRule[]> { return (await this.request<ListResponse<ScheduleRule>>(`/api/v1/projects/${projectId}/schedule-rules`)).items }
   saveAttendancePolicy(projectId: string, input: CreateAttendancePolicyInput): Promise<AttendancePolicy> { return this.request<AttendancePolicy>(`/api/v1/projects/${projectId}/attendance-policy`, { method: 'POST', data: input }) }
   async generateSessions(projectId: string, scheduleRuleId: string): Promise<readonly SessionSummary[]> { return (await this.request<ListResponse<SessionSummary>>(`/api/v1/projects/${projectId}/sessions/generate`, { method: 'POST', data: { scheduleRuleId } })).items }
+  async listMembers(projectId: string): Promise<readonly ProjectMember[]> { return (await this.request<ListResponse<ProjectMember>>(`/api/v1/projects/${projectId}/members`)).items }
   async listSessions(projectId: string): Promise<readonly SessionSummary[]> {
     return (await this.request<ListResponse<SessionSummary>>(`/api/v1/projects/${projectId}/sessions`)).items
   }
   async listSchedule(): Promise<readonly SessionSummary[]> {
-    const projects = await this.listProjects()
-    const sessions = await Promise.all(projects.map((project) => this.listSessions(project.id)))
-    return sessions.flat()
+    return (await this.getTimetable()).items
   }
   async getSession(id: string): Promise<SessionSummary | null> {
     try { return await this.request<SessionSummary>(`/api/v1/sessions/${id}`) } catch { return null }
   }
+  async checkIn(sessionId: string, input: CheckInInput): Promise<AttendanceRecord> { return this.request<AttendanceRecord>(`/api/v1/sessions/${sessionId}/check-in`, { method: 'POST', data: input }) }
+  async getAttendance(sessionId: string): Promise<readonly AttendanceRecord[]> { return (await this.request<ListResponse<AttendanceRecord>>(`/api/v1/sessions/${sessionId}/attendance`)).items }
   async getToday(): Promise<TodayResponse> {
     return this.request<TodayResponse>('/api/v1/me/today')
   }
   getMe(): Promise<MeResponse> { return this.request<MeResponse>('/api/v1/me') }
+  getTimetable(): Promise<TimetableResponse> { return this.request<TimetableResponse>('/api/v1/me/timetable') }
 }
 
 export const apiRepository = new ApiRepository()

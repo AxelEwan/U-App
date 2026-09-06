@@ -1,4 +1,4 @@
-import type { AttendancePolicy, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, MeResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse } from '@qzu/contracts'
 
 export interface ProjectRepository {
   listProjects(): Promise<readonly ProjectSummary[]>
@@ -8,17 +8,21 @@ export interface ProjectRepository {
   listScheduleRules(projectId: string): Promise<readonly ScheduleRule[]>
   saveAttendancePolicy(projectId: string, input: CreateAttendancePolicyInput): Promise<AttendancePolicy>
   generateSessions(projectId: string, scheduleRuleId: string): Promise<readonly SessionSummary[]>
+  listMembers(projectId: string): Promise<readonly ProjectMember[]>
 }
 
 export interface SessionRepository {
   listSessions(projectId: string): Promise<readonly SessionSummary[]>
   listSchedule(): Promise<readonly SessionSummary[]>
   getSession(id: string): Promise<SessionSummary | null>
+  checkIn(sessionId: string, input: CheckInInput): Promise<AttendanceRecord>
+  getAttendance(sessionId: string): Promise<readonly AttendanceRecord[]>
 }
 
 export interface TodayRepository {
   getToday(): Promise<TodayResponse>
   getMe(): Promise<MeResponse>
+  getTimetable(): Promise<TimetableResponse>
 }
 
 export interface ClientRepository extends ProjectRepository, SessionRepository, TodayRepository {}

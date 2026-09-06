@@ -11,7 +11,7 @@ QZU is a privacy-conscious campus attendance tool whose primary business object 
 
 ## Current scope
 
-M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contracts, schema/migrations, authentication boundaries, and API foundation. M3 adds real MySQL persistence and project authoring; Casdoor, WeChat, location upload, passcode verification, QR, Excel, and real check-in POST remain deferred.
+M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contracts, schema/migrations, authentication boundaries, and API foundation. M3 adds real MySQL persistence, project authoring, member-bound timetable reads, and NORMAL button check-in. Casdoor, WeChat, location upload, passcode verification, QR, Excel, and advanced attendance management remain deferred.
 
 ## Product invariants
 
@@ -25,6 +25,6 @@ M0, M1, M1.5 and M1.5.1 + M2 provide the application shells, product IA, contrac
 
 M1.5 establishes the user-facing product skeleton. M1.5.1 removes scenario tabs from the Dashboard: `HomeDashboard` renders active check-in, next session, today's schedule, or empty state from data. The single Taro client has shared route/navigation definitions, a WeChat custom TabBar, an H5 bottom navigation, a mobile-first weekly schedule, a management workspace, profile/settings skeletons, and repository adapters.
 
-The dashboard Mock Repository supports active check-in, next class countdown, multiple courses, and no-course states. All countdowns are calculated from the current clock; no scenario is represented only by a hard-coded label. Mock roles are fictional `STUDENT` and `ADMIN` users and contain no real student names.
+The dashboard Mock Repository supports active check-in, next class countdown, multiple courses, and no-course states. The API Repository now reads `/api/v1/me/today` and `/api/v1/me/timetable`, and the dashboard/course detail can submit NORMAL check-in through the API. All countdowns are calculated from the current clock; no scenario is represented only by a hard-coded label. Mock roles are fictional `STUDENT` and `ADMIN` users and contain no real student names.
 
-M1.5.1 + M2 add the single dynamic Dashboard and read-oriented APIs. M3 keeps the same repository interface while selecting `memory` explicitly for review/tests or `mysql` for a local `u_app` database reached through `127.0.0.1:13306`. Admin project authoring persists Project, Schedule Rule, Attendance Policy, and generated Event Sessions. API responses contain timestamps/statuses, never preformatted Chinese countdown text.
+M1.5.1 + M2 add the single dynamic Dashboard and read-oriented APIs. M3 keeps the same repository interface while selecting `memory` explicitly for review/tests or `mysql` for a local `u_app` database reached through `127.0.0.1:13306`. Admin project authoring persists Project, Schedule Rule, Attendance Policy, and generated Event Sessions; a roster member is required for NORMAL check-in. API responses contain timestamps/statuses, never preformatted Chinese countdown text. Provider-backed user login and production roster provisioning are still separate work.

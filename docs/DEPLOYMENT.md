@@ -2,7 +2,7 @@
 
 本文档描述 U-App 当前的生产部署基础：API 使用宝塔 Node 项目管理，由宝塔托管的 PM2 进程运行；H5 和管理员 Web 使用各自的 Vercel 项目。项目不使用 systemd、Docker 或自定义服务器守护脚本。
 
-本阶段只准备稳定的生产构建与启动入口，不执行数据库 migration，不接入 Casdoor/微信登录，也不开发签到业务。
+本部署基础不自动执行数据库 migration，不接入 Casdoor/微信登录；课程、课表和 NORMAL 签到由 API 业务阶段独立验证。
 
 ## 生产目录与构建产物
 
@@ -111,7 +111,20 @@ SELECT DATABASE();
 SHOW TABLES;
 ```
 
-如果数据库不存在、目标不明确或不是已确认的专用数据库，立即停止，不执行 migration。当前仓库的安全 migration 命令仍有开发数据库保护条件，不能在生产环境绕过保护直接运行。
+如果数据库不存在、目标不明确或不是已确认的专用数据库，立即停止，不执行 migration。当前仓库的安全 migration 命令会根据 `APP_ENV` 校验目标：开发只允许 SSH Tunnel 的 `127.0.0.1:13306`，生产只允许同机 MySQL 的 loopback `3306`/默认端口。它还会拒绝未知表，或已有业务表但没有 Drizzle migration history 的状态。
+
+在 disposable 或已获批准的目标上，人工确认 preflight 后才可运行：
+
+```bash
+# 开发：通过 SSH Tunnel，命令只在确认目标为 u_app 后执行
+APP_ENV=development DATABASE_URL='mysql://user:password@127.0.0.1:13306/u_app' pnpm db:migrate
+
+# 生产：仅在完成备份、SHOW TABLES 审核并获得批准后执行
+NODE_ENV=production APP_ENV=production MIGRATION_CONFIRM=u_app-production \
+DATABASE_URL='mysql://user:password@127.0.0.1:3306/u_app' pnpm db:migrate
+```
+
+生产发布 workflow 和服务器 deploy entry 均不会调用该命令。
 
 ### 5. 构建 API
 
@@ -250,11 +263,11 @@ Casdoor 尚未接入。未来的 `CASDOOR_ISSUER`、`CASDOOR_CLIENT_ID`、`CASDO
 
 下一阶段只做数据库初始化准备与验证，不与本部署 foundation 混在一起：
 
-1. 在 disposable MySQL 8 数据库中对照 `packages/db/src/schema.ts` 和 `packages/db/migrations/0000`、`0001`、`0002`、`0003`，确认 migration 链可从零执行。
-2. 重点复核 `users`、`identities`、`projects`、`schedule_rules`、`event_sessions`、`attendance_records`，以及 session 幂等所需的唯一约束。
-3. 处理当前 `0001` 与 `0002` 中重复 DDL 的问题；先记录到 `docs/DECISIONS.md`，不要为了美观重写已有历史 migration。
-4. 确认生产数据库名称、账号权限、备份/回滚方案和 `DATABASE_URL`，并在执行前再次运行 `SELECT DATABASE()`、`SHOW TABLES`。
-5. 由人工批准后只执行一次 migration，记录实际数据库状态，再以 `REPOSITORY_MODE=mysql` 启动 API。
-6. 创建一个测试 Project，重启宝塔 Node 项目后验证数据仍存在；补充 API integration test 与 MySQL 验证记录。
+1. 在 disposable MySQL 8 数据库中从 `packages/db/migrations/0000_clean_baseline.sql` 从零执行，并对照 `packages/db/src/schema.ts`。
+2. 重点复核 `users`、`user_identities`、`projects`、`project_members`、`schedule_rules`、`event_sessions`、`attendance_policies`、`attendance_records`，以及 session 幂等所需的唯一约束。
+3. 当前 baseline 已移除从未执行的旧 `0001`–`0003` 重复 DDL；该决策记录在 `docs/DECISIONS.md`，不会在生产发布中自动应用。
+4. 先确认 production `u_app` 是否已有项目表；未知时只执行人工 preflight：`SELECT DATABASE();`、`SHOW TABLES;`，不要自动迁移。
+5. 确认数据库名称、账号权限、备份/回滚方案和 `DATABASE_URL`。人工批准后才运行一次 `pnpm db:migrate`，并保存 migration history。
+6. 以 `REPOSITORY_MODE=mysql` 启动 API，创建测试 Project/Rule/Session，重启宝塔 Node 项目后验证数据仍存在。
 
 在 M3.5 完成前，不把生产 persistence 或签到能力标记为完成。

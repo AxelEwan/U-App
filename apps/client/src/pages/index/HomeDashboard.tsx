@@ -17,15 +17,17 @@ function statusLabel(status: ReturnType<typeof useSessionStatus>): string {
   return labels[status]
 }
 
-export function HomeActiveCheckin({ session, clockOffset }: { readonly session: SessionSummary; readonly clockOffset: number }) {
+export function HomeActiveCheckin({ session, clockOffset, onCheckIn }: { readonly session: SessionSummary; readonly clockOffset: number; readonly onCheckIn: () => Promise<void> }) {
   const status = useSessionStatus(session, clockOffset)
   const countdown = useCountdown(session.checkInCloseAt, clockOffset)
+  const [checking, setChecking] = useState(false)
+  const handleCheckIn = async () => { setChecking(true); try { await onCheckIn(); await Taro.showToast({ title: '签到成功', icon: 'success' }) } catch { await Taro.showToast({ title: '签到失败，请稍后重试', icon: 'none' }) } finally { setChecking(false) } }
   return <View className="hero-card">
     <Text className="hero-kicker">正在进行的签到</Text>
     <Text className="card-title">{session.projectName}</Text>
     <Text className="card-meta">{timeRange(session)} · {session.locationName ?? '地点待定'}</Text>
     <Text className="card-meta">签到截止倒计时：{countdown.display} · {statusLabel(status)}</Text>
-    <View className="primary-button hero-action" onClick={() => void Taro.showToast({ title: '签到接口将在后续接入', icon: 'none' })}>立即签到</View>
+    <View className={`primary-button hero-action ${checking ? 'disabled' : ''}`} onClick={() => { if (!checking) void handleCheckIn() }}>{checking ? '签到中…' : '立即签到'}</View>
   </View>
 }
 
@@ -60,6 +62,7 @@ export default function HomeDashboard() {
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [clockOffset, setClockOffset] = useState(0)
   const [error, setError] = useState(false)
+  const refreshToday = async () => { const value = await apiRepository.getToday(); setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) }
   useEffect(() => {
     let active = true
     void apiRepository.getToday().then((value) => { if (active) { setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) } }).catch(() => { if (active) setError(true) })
@@ -69,7 +72,7 @@ export default function HomeDashboard() {
   if (!today) return <View className="card"><Text className="card-meta">正在读取今日安排…</Text></View>
   const list = today.todaySessions
   return <>
-    {today.activeCheckin ? <HomeActiveCheckin session={today.activeCheckin} clockOffset={clockOffset} /> : null}
+    {today.activeCheckin ? <HomeActiveCheckin session={today.activeCheckin} clockOffset={clockOffset} onCheckIn={refreshToday} /> : null}
     {!today.activeCheckin && today.nextSession ? <HomeNextSession session={today.nextSession} clockOffset={clockOffset} /> : null}
     {list.length ? <><View className="section-heading"><Text className="section-title">今日安排</Text><Text className="section-caption">实时数据</Text></View><HomeTodaySchedule sessions={list} /></> : <HomeEmpty />}
   </>

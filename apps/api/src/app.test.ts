@@ -1,4 +1,4 @@
-import { healthResponseSchema, projectSummarySchema, todayResponseSchema } from '@qzu/contracts'
+import { attendanceRecordsResponseSchema, healthResponseSchema, projectSummarySchema, timetableResponseSchema, todayResponseSchema } from '@qzu/contracts'
 import { describe, expect, it } from 'vitest'
 
 import { createApp } from './app'
@@ -64,5 +64,27 @@ describe('API application', () => {
     const second = await app.request(`/api/v1/projects/${project.id}/sessions/generate`, { method: 'POST', headers, body: JSON.stringify({ scheduleRuleId: rule.id }) })
     expect(((await first.json()) as { items: unknown[] }).items).toHaveLength(1)
     expect(((await second.json()) as { items: unknown[] }).items).toHaveLength(1)
+    const member = await app.request(`/api/v1/projects/${project.id}/members`, { method: 'POST', headers, body: JSON.stringify({ userId: '00000000-0000-4000-8000-000000000011', displayName: 'Dev Student' }) })
+    expect(member.status).toBe(201)
+    const timetable = await app.request('/api/v1/me/timetable', { headers: { 'X-Dev-User': 'student' } })
+    expect(timetableResponseSchema.parse(await timetable.json()).items.some((item) => item.projectId === project.id)).toBe(true)
+  })
+
+  it('supports a roster-bound normal check-in and prevents duplicates', async () => {
+    const app = createApp({ corsOrigins: [], devAuthEnabled: true })
+    const studentHeaders = { 'Content-Type': 'application/json', 'X-Dev-User': 'student' }
+    const today = await app.request('/api/v1/me/today', { headers: { 'X-Dev-User': 'student' } })
+    const active = ((await today.json()) as { activeCheckin: { id: string } | null }).activeCheckin
+    expect(active).not.toBeNull()
+    const checkIn = await app.request(`/api/v1/sessions/${active!.id}/check-in`, { method: 'POST', headers: studentHeaders, body: '{}' })
+    expect(checkIn.status).toBe(201)
+    expect((await checkIn.json() as { status: string }).status).toBe('LATE')
+    const duplicate = await app.request(`/api/v1/sessions/${active!.id}/check-in`, { method: 'POST', headers: studentHeaders, body: '{}' })
+    expect(duplicate.status).toBe(409)
+    const attendance = await app.request(`/api/v1/sessions/${active!.id}/attendance`, { headers: { 'X-Dev-User': 'student' } })
+    expect(attendance.status).toBe(200)
+    expect(attendanceRecordsResponseSchema.parse(await attendance.json()).items).toHaveLength(1)
+    const timetable = await app.request('/api/v1/me/timetable', { headers: { 'X-Dev-User': 'student' } })
+    expect(timetableResponseSchema.parse(await timetable.json()).items.length).toBeGreaterThan(0)
   })
 })

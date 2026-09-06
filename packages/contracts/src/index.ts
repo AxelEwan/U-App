@@ -44,6 +44,7 @@ export const projectStatusSchema = z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED'])
 export const rosterModeSchema = z.enum(['ROSTER', 'FREE_FORM', 'MIXED'])
 export const attendanceStatusSchema = z.enum(['PRESENT', 'LATE', 'LEAVE', 'ABSENT'])
 export const attendanceSourceSchema = z.enum(['SELF_CHECKIN', 'ADMIN'])
+export const attendanceMethodSchema = z.enum(['MANUAL', 'PASSCODE', 'LOCATION', 'COMBINED'])
 export const sessionLifecycleStatusSchema = z.enum([
   'UPCOMING',
   'CHECKIN_OPEN',
@@ -58,8 +59,12 @@ export const attendanceRecordSchema = z.object({
   projectMemberId: z.uuid(),
   userId: z.uuid().nullable(),
   checkedInAt: z.iso.datetime().nullable(),
+  method: attendanceMethodSchema,
   source: attendanceSourceSchema,
   status: attendanceStatusSchema,
+  distanceMeters: z.number().nullable(),
+  accuracyMeters: z.number().nullable(),
+  locationPassed: z.boolean().nullable(),
   createdByUserId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -78,6 +83,14 @@ export const projectSummarySchema = z.object({
   status: projectStatusSchema,
 })
 
+export const projectMemberSchema = z.object({
+  id: z.uuid(),
+  projectId: z.uuid(),
+  userId: z.uuid().nullable(),
+  displayName: z.string().min(1).max(120),
+  externalCode: z.string().max(120).nullable(),
+})
+
 export const sessionSummarySchema = z.object({
   id: z.uuid(),
   projectId: z.uuid(),
@@ -91,7 +104,10 @@ export const sessionSummarySchema = z.object({
 })
 
 export const projectsResponseSchema = z.object({ items: z.array(projectSummarySchema) })
+export const projectMembersResponseSchema = z.object({ items: z.array(projectMemberSchema) })
 export const sessionsResponseSchema = z.object({ items: z.array(sessionSummarySchema) })
+export const timetableResponseSchema = z.object({ serverTime: z.iso.datetime(), items: z.array(sessionSummarySchema) })
+export const attendanceRecordsResponseSchema = z.object({ items: z.array(attendanceRecordSchema) })
 export const todayResponseSchema = z.object({
   serverTime: z.iso.datetime(),
   activeCheckin: sessionSummarySchema.nullable(),
@@ -129,6 +145,12 @@ export const attendancePolicySchema = z.object({
 })
 
 export const createAttendancePolicyInputSchema = attendancePolicySchema.omit({ id: true, projectId: true })
+
+export const createProjectMemberInputSchema = z.object({
+  userId: z.uuid().nullable().optional(),
+  displayName: z.string().trim().min(1).max(120),
+  externalCode: z.string().trim().max(120).nullable().optional(),
+})
 
 export const meResponseSchema = z.object({
   userId: z.uuid(),
@@ -192,3 +214,6 @@ export type CreateProjectInput = z.infer<typeof createProjectInputSchema>
 export type UpdateProjectInput = z.infer<typeof updateProjectInputSchema>
 export type GenerateSessionsInput = z.infer<typeof generateSessionsInputSchema>
 export type AttendanceRecord = z.infer<typeof attendanceRecordSchema>
+export type ProjectMember = z.infer<typeof projectMemberSchema>
+export type CreateProjectMemberInput = z.infer<typeof createProjectMemberInputSchema>
+export type TimetableResponse = z.infer<typeof timetableResponseSchema>

@@ -1,20 +1,27 @@
 import {
+  attendanceRecordSchema,
+  attendanceRecordsResponseSchema,
   attendancePolicySchema,
+  checkInInputSchema,
   createAttendancePolicyInputSchema,
+  createProjectMemberInputSchema,
   createProjectInputSchema,
   createScheduleRuleInputSchema,
   generateSessionsInputSchema,
   healthResponseSchema,
   meResponseSchema,
   projectsResponseSchema,
+  projectMembersResponseSchema,
   scheduleRuleSchema,
   sessionsResponseSchema,
   todayResponseSchema,
+  timetableResponseSchema,
   updateProjectInputSchema,
   updateScheduleRuleInputSchema,
   type ApiErrorCode,
 } from '@qzu/contracts'
 import { requireAdmin, type AuthContext } from '@qzu/auth'
+import { DomainError } from '@qzu/core'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
@@ -94,6 +101,19 @@ export function createApp(config: ApiRuntimeConfig) {
     if (!project) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     return context.json(project)
   })
+  app.get('/api/v1/projects/:id/members', async (context) => {
+    await adminContext(context.req.raw, config.devAuthEnabled === true)
+    if (!(await repository.getProject(context.req.param('id')))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
+    return context.json(projectMembersResponseSchema.parse({ items: await repository.listMembers(context.req.param('id')) }))
+  })
+  app.post('/api/v1/projects/:id/members', async (context) => {
+    await adminContext(context.req.raw, config.devAuthEnabled === true)
+    const projectId = context.req.param('id')
+    if (!(await repository.getProject(projectId))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
+    const input = createProjectMemberInputSchema.safeParse(await context.req.json())
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid project member input', input.error.flatten())
+    return context.json(await repository.createMember(projectId, input.data), 201)
+  })
   app.get('/api/v1/projects/:id/schedule-rules', async (context) => {
     if (!(await repository.getProject(context.req.param('id')))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     return context.json({ items: (await repository.listScheduleRules(context.req.param('id'))).map((item) => scheduleRuleSchema.parse(item)) })
@@ -137,15 +157,36 @@ export function createApp(config: ApiRuntimeConfig) {
     if (!value) throw new ApiError('SESSION_NOT_FOUND', 'Session not found')
     return context.json(value)
   })
+  app.post('/api/v1/sessions/:id/check-in', async (context) => {
+    const auth = resolveAuth(context.req.raw, config.devAuthEnabled === true)
+    if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
+    const input = checkInInputSchema.safeParse(await context.req.json())
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid check-in input', input.error.flatten())
+    return context.json(attendanceRecordSchema.parse(await repository.checkIn(context.req.param('id'), auth.userId, input.data)), 201)
+  })
+  app.get('/api/v1/sessions/:id/attendance', async (context) => {
+    const auth = resolveAuth(context.req.raw, config.devAuthEnabled === true)
+    if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
+    const session = await repository.getSession(context.req.param('id'))
+    if (!session) throw new ApiError('SESSION_NOT_FOUND', 'Session not found')
+    const records = await repository.listAttendance(session.id)
+    const visible = auth.capabilities.canManageProjects ? records : records.filter((record) => record.userId === auth.userId)
+    return context.json(attendanceRecordsResponseSchema.parse({ items: visible }))
+  })
   app.get('/api/v1/me/today', async (context) => {
     const auth = resolveAuth(context.req.raw, config.devAuthEnabled === true)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     return context.json(todayResponseSchema.parse(await repository.getToday(auth.userId)))
   })
+  app.get('/api/v1/me/timetable', async (context) => {
+    const auth = resolveAuth(context.req.raw, config.devAuthEnabled === true)
+    if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
+    return context.json(timetableResponseSchema.parse(await repository.getTimetable(auth.userId)))
+  })
   app.notFound((context) => context.json({ error: { code: 'NOT_FOUND', message: 'Resource not found', requestId: context.get('requestId') } }, 404))
   app.onError((error, context) => {
     const requestId = context.get('requestId') || crypto.randomUUID()
-    const apiError = error instanceof ApiError ? error : error instanceof RepositoryError ? new ApiError(error.code, error.message) : error instanceof Error && error.name === 'AuthDomainError' ? new ApiError(error.message.includes('Authentication') ? 'UNAUTHORIZED' : 'FORBIDDEN', error.message) : new ApiError('INTERNAL_ERROR', 'Internal server error')
+    const apiError = error instanceof ApiError ? error : error instanceof RepositoryError ? new ApiError(error.code, error.message) : error instanceof DomainError ? new ApiError(error.code, error.message) : error instanceof Error && error.name === 'AuthDomainError' ? new ApiError(error.message.includes('Authentication') ? 'UNAUTHORIZED' : 'FORBIDDEN', error.message) : new ApiError('INTERNAL_ERROR', 'Internal server error')
     console.error(JSON.stringify({ level: 'error', event: 'request_error', requestId, code: apiError.code }))
     return context.json({ error: { code: apiError.code, message: apiError.message, requestId, ...(apiError.details === undefined ? {} : { details: apiError.details }) } }, errorStatus(apiError.code))
   })

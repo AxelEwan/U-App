@@ -1,19 +1,25 @@
+import { checkInInputSchema, createProjectMemberInputSchema } from '@qzu/contracts'
 import type {
   AttendancePolicy,
+  AttendanceRecord,
+  CheckInInput,
   CreateAttendancePolicyInput,
   CreateProjectInput,
+  CreateProjectMemberInput,
   CreateScheduleRuleInput,
   GenerateSessionsInput,
   ProjectSummary,
+  ProjectMember,
   ScheduleRule,
   SessionSummary,
   TodayResponse,
+  TimetableResponse,
   UpdateProjectInput,
   UpdateScheduleRuleInput,
 } from '@qzu/contracts'
-import { deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
-import { createDatabase, attendancePolicies, eventSessions, projectAdmins, projects, scheduleRules, users } from '@qzu/db'
-import { asc, eq, sql } from 'drizzle-orm'
+import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
+import { createDatabase, attendancePolicies, attendanceRecords, eventSessions, projectAdmins, projectMembers, projects, scheduleRules, users } from '@qzu/db'
+import { and, asc, eq, sql } from 'drizzle-orm'
 
 import { RepositoryError, type BusinessRepository } from './repository'
 import type { AuthContext } from '@qzu/auth'
@@ -23,11 +29,16 @@ type ProjectRow = typeof projects.$inferSelect
 type SessionRow = typeof eventSessions.$inferSelect
 type RuleRow = typeof scheduleRules.$inferSelect
 type PolicyRow = typeof attendancePolicies.$inferSelect
+type MemberRow = typeof projectMembers.$inferSelect
+type AttendanceRow = typeof attendanceRecords.$inferSelect
 
 const toRepositoryError = (): RepositoryError => new RepositoryError('DATABASE_UNAVAILABLE', 'Database is temporarily unavailable')
 const mapProject = (row: ProjectRow): ProjectSummary => ({ id: row.id, name: row.name, description: row.description, type: row.type, timezone: row.timezone, effectiveStartDate: row.effectiveStartDate, effectiveEndDate: row.effectiveEndDate, status: row.status })
 const mapRule = (row: RuleRow): ScheduleRule => ({ id: row.id, projectId: row.projectId, weekdays: row.weekdays, everyNWeeks: row.intervalWeeks, localStartTime: row.localStartTime, localEndTime: row.localEndTime, effectiveStartDate: row.startDate, effectiveEndDate: row.endDate, timezone: row.timezone })
 const mapPolicy = (row: PolicyRow): AttendancePolicy => ({ id: row.id, projectId: row.projectId, rosterMode: row.rosterMode, checkInOpenMinutesBefore: row.checkInOpenMinutesBefore, checkInCloseMinutesAfter: row.checkInCloseMinutesAfter, locationEnabled: row.requireLocation, locationName: row.locationName, centerLatitude: row.centerLatitude === null ? null : Number(row.centerLatitude), centerLongitude: row.centerLongitude === null ? null : Number(row.centerLongitude), radiusMeters: row.radiusMeters, passcodeEnabled: row.requirePasscode })
+const mapMember = (row: MemberRow): ProjectMember => ({ id: row.id, projectId: row.projectId, userId: row.userId, displayName: row.displayName, externalCode: row.externalCode })
+const mapAttendance = (row: AttendanceRow): AttendanceRecord => ({ id: row.id, sessionId: row.sessionId, projectMemberId: row.projectMemberId, userId: row.userId, checkedInAt: row.checkedInAt?.toISOString() ?? null, method: row.method, source: row.source, status: row.status, distanceMeters: row.distanceMeters === null ? null : Number(row.distanceMeters), accuracyMeters: row.accuracyMeters === null ? null : Number(row.accuracyMeters), locationPassed: row.locationPassed, createdByUserId: row.createdByUserId, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), voidedAt: row.voidedAt?.toISOString() ?? null, voidedByUserId: row.voidedByUserId })
+const localDateKey = (value: Date, timeZone: string): string => new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(value)
 
 function mapSession(row: SessionRow, project: ProjectSummary, now: Date): SessionSummary {
   return { id: row.id, projectId: row.projectId, projectName: project.name, scheduledStartAt: row.scheduledStartAt.toISOString(), scheduledEndAt: row.scheduledEndAt.toISOString(), checkInOpenAt: row.checkinOpenAt.toISOString(), checkInCloseAt: row.checkinCloseAt.toISOString(), locationName: row.locationName, status: deriveSessionStatus({ now, startAt: row.scheduledStartAt, endAt: row.scheduledEndAt, checkInOpenAt: row.checkinOpenAt, checkInCloseAt: row.checkinCloseAt }) }
@@ -82,7 +93,67 @@ export class MySqlBusinessRepository implements BusinessRepository {
     } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
   }
   async getSession(id: string, now = new Date()): Promise<SessionSummary | null> { try { const row = (await this.db.select().from(eventSessions).where(eq(eventSessions.id, id)).limit(1))[0]; if (!row) return null; const project = await this.getProject(row.projectId); return project ? mapSession(row, project, now) : null } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() } }
-  async getToday(_userId: string, now = new Date()): Promise<TodayResponse> { try { const rows = await this.db.select().from(eventSessions).orderBy(asc(eventSessions.scheduledStartAt)); const projectRows = await this.db.select().from(projects); const byId = new Map(projectRows.map((row) => [row.id, mapProject(row)])); const day = now.toISOString().slice(0, 10); const todaySessions = rows.filter((row) => row.scheduledStartAt.toISOString().slice(0, 10) === day).flatMap((row) => { const project = byId.get(row.projectId); return project ? [mapSession(row, project, now)] : [] }); return { serverTime: now.toISOString(), activeCheckin: todaySessions.find((item) => item.status === 'CHECKIN_OPEN' || item.status === 'IN_PROGRESS') ?? null, nextSession: todaySessions.find((item) => item.status === 'UPCOMING') ?? null, todaySessions } } catch { throw toRepositoryError() } }
+  async getToday(userId: string, now = new Date()): Promise<TodayResponse> {
+    try {
+      const memberships = await this.db.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId))
+      const projectsForUser = await Promise.all([...new Set(memberships.map((item) => item.projectId))].map(async (projectId) => {
+        const project = await this.getProject(projectId)
+        const sessions = project ? await this.listSessions(projectId, now) : []
+        return project ? { project, sessions } : null
+      }))
+      const todaySessions = projectsForUser.flatMap((value) => value?.sessions.filter((item) => localDateKey(new Date(item.scheduledStartAt), value.project.timezone) === localDateKey(now, value.project.timezone)) ?? []).sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt))
+      return { serverTime: now.toISOString(), activeCheckin: todaySessions.find((item) => item.status === 'CHECKIN_OPEN' || item.status === 'IN_PROGRESS') ?? null, nextSession: todaySessions.find((item) => item.status === 'UPCOMING') ?? null, todaySessions }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async listMembers(projectId: string): Promise<readonly ProjectMember[]> { try { return (await this.db.select().from(projectMembers).where(eq(projectMembers.projectId, projectId)).orderBy(asc(projectMembers.createdAt))).map(mapMember) } catch { throw toRepositoryError() } }
+  async createMember(projectId: string, input: CreateProjectMemberInput): Promise<ProjectMember> {
+    try {
+      const project = await this.getProject(projectId)
+      if (!project) throw new RepositoryError('NOT_FOUND', 'Project not found')
+      const value = createProjectMemberInputSchema.parse(input)
+      if (value.userId) {
+        const existing = (await this.db.select().from(projectMembers).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, value.userId))).limit(1))[0]
+        if (existing) return mapMember(existing)
+        await this.db.insert(users).values({ id: value.userId, displayName: value.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: value.displayName } })
+      }
+      const id = crypto.randomUUID()
+      await this.db.insert(projectMembers).values({ id, projectId, userId: value.userId ?? null, displayName: value.displayName, externalCode: value.externalCode ?? null })
+      const row = (await this.db.select().from(projectMembers).where(eq(projectMembers.id, id)).limit(1))[0]
+      if (!row) throw toRepositoryError()
+      return mapMember(row)
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async getMemberForUser(projectId: string, userId: string): Promise<ProjectMember | null> { try { const row = (await this.db.select().from(projectMembers).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId))).limit(1))[0]; return row ? mapMember(row) : null } catch { throw toRepositoryError() } }
+  async getTimetable(userId: string, now = new Date()): Promise<TimetableResponse> {
+    try {
+      const memberships = await this.db.select({ projectId: projectMembers.projectId }).from(projectMembers).where(eq(projectMembers.userId, userId))
+      const items = (await Promise.all([...new Set(memberships.map((item) => item.projectId))].map((projectId) => this.listSessions(projectId, now)))).flat().sort((a, b) => a.scheduledStartAt.localeCompare(b.scheduledStartAt))
+      return { serverTime: now.toISOString(), items }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async checkIn(sessionId: string, userId: string, input: CheckInInput, now = new Date()): Promise<AttendanceRecord> {
+    try {
+      checkInInputSchema.parse(input)
+      const sessionRow = (await this.db.select().from(eventSessions).where(eq(eventSessions.id, sessionId)).limit(1))[0]
+      if (!sessionRow) throw new DomainError('SESSION_NOT_FOUND', 'Session not found')
+      const policy = (await this.db.select().from(attendancePolicies).where(eq(attendancePolicies.projectId, sessionRow.projectId)).limit(1))[0]
+      const member = await this.getMemberForUser(sessionRow.projectId, userId)
+      const existing = member ? (await this.db.select().from(attendanceRecords).where(and(eq(attendanceRecords.sessionId, sessionId), eq(attendanceRecords.projectMemberId, member.id))).limit(1))[0] : undefined
+      assertAttendanceEligible({ now, opensAt: sessionRow.checkinOpenAt, closesAt: sessionRow.checkinCloseAt, rosterMode: policy?.rosterMode ?? 'ROSTER', hasMemberRecord: member !== null, alreadyCheckedIn: existing !== undefined, locationRequired: policy?.requireLocation ?? false, locationPassed: false, passcodeRequired: policy?.requirePasscode ?? false, passcodePassed: false })
+      if (!member) throw new DomainError('MEMBER_NOT_ELIGIBLE', 'A project member record is required')
+      const checkedInAt = now
+      const id = crypto.randomUUID()
+      await this.db.insert(attendanceRecords).values({ id, sessionId, projectMemberId: member.id, userId, checkedInAt, method: 'MANUAL', source: 'SELF_CHECKIN', status: now > sessionRow.scheduledStartAt ? 'LATE' : 'PRESENT', distanceMeters: null, accuracyMeters: null, locationPassed: null, createdByUserId: userId, voidedAt: null, voidedByUserId: null, updatedAt: now })
+      const row = (await this.db.select().from(attendanceRecords).where(eq(attendanceRecords.id, id)).limit(1))[0]
+      if (!row) throw toRepositoryError()
+      return mapAttendance(row)
+    } catch (error) {
+      if (error instanceof RepositoryError || error instanceof DomainError) throw error
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ER_DUP_ENTRY') throw new DomainError('ALREADY_CHECKED_IN', 'Attendance has already been recorded')
+      throw toRepositoryError()
+    }
+  }
+  async listAttendance(sessionId: string): Promise<readonly AttendanceRecord[]> { try { return (await this.db.select().from(attendanceRecords).where(eq(attendanceRecords.sessionId, sessionId)).orderBy(asc(attendanceRecords.createdAt))).map(mapAttendance) } catch { throw toRepositoryError() } }
   async upsertAttendancePolicy(projectId: string, input: CreateAttendancePolicyInput): Promise<AttendancePolicy> { try { const id = crypto.randomUUID(); const values = { id, projectId, rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters }; await this.db.insert(attendancePolicies).values(values).onDuplicateKeyUpdate({ set: { rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters } }); const row = (await this.db.select().from(attendancePolicies).where(eq(attendancePolicies.projectId, projectId)).limit(1))[0]; if (!row) throw toRepositoryError(); return mapPolicy(row) } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() } }
 }
 
