@@ -19,7 +19,11 @@ const app = createApp({
   ...(repository ? {
     resolveMiniProgramSession: (token: string) => repository.resolveMiniProgramSession(token),
     createMiniProgramSession: (providerSubject: string) => repository.createMiniProgramSession(providerSubject),
+    resolveWebSession: (token: string) => repository.resolveWebSession(token),
+    createWebStudentSession: (classId: string, displayName: string, studentNoLast4: string) => repository.createWebStudentSession(classId, displayName, studentNoLast4),
+    createAdminWebSession: () => repository.createAdminWebSession(),
   } : {}),
+  ...(env.ADMIN_LOGIN_SECRET_HASH ? { adminLoginSecretHash: env.ADMIN_LOGIN_SECRET_HASH } : {}),
   ...(env.WECHAT_APP_ID && env.WECHAT_APP_SECRET ? {
     exchangeWechatCode: async (code: string) => {
       const params = new URLSearchParams({ appid: env.WECHAT_APP_ID!, secret: env.WECHAT_APP_SECRET!, js_code: code, grant_type: 'authorization_code' })

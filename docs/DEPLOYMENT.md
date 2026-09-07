@@ -66,8 +66,9 @@ API_PORT=3004
 REPOSITORY_MODE=mysql
 DATABASE_URL=mysql://user:password@127.0.0.1:3306/u_app
 AUTH_SESSION_SECRET=replace-with-a-long-random-secret
-CORS_ORIGINS=https://qzu.x-lab.top,https://qzu-admin.x-lab.top
+CORS_ORIGINS=https://u.x-lab.top,https://qzu-admin.x-lab.top
 DEV_AUTH_ENABLED=false
+ADMIN_LOGIN_SECRET_HASH=scrypt$16384$8$1$<base64-salt>$<base64-digest>
 ```
 
 当前 API 配置模块读取的是 `API_PORT`，不是 `PORT`，所以生产端口应配置为 `API_PORT=3004`。宝塔界面中的监听端口仍填写 `3004`。不要把真实 `DATABASE_URL`、`AUTH_SESSION_SECRET` 或其他 secret 写入仓库、README、文档或前端环境变量。
@@ -77,6 +78,12 @@ DEV_AUTH_ENABLED=false
 ```bash
 chown www:www /etc/u-app/api-production.env
 chmod 600 /etc/u-app/api-production.env
+```
+
+`ADMIN_LOGIN_SECRET_HASH` 使用 scrypt 格式生成；密码本身不写入仓库或 Vercel：
+
+```bash
+node -e 'const c=require("node:crypto");const s=c.randomBytes(16);const d=c.scryptSync(process.argv[1],s,64,{N:16384,r:8,p:1});console.log("scrypt$16384$8$1$"+s.toString("base64")+"$"+d.toString("base64"))' '在本机临时输入管理员密码'
 ```
 
 ### 3. 数据库目标按环境区分
@@ -238,6 +245,9 @@ workflow 的 SSH 连接强制 `BatchMode=yes`、`StrictHostKeyChecking=yes` 和�
 - `AUTH_SESSION_SECRET`
 - `CORS_ORIGINS`
 - `DEV_AUTH_ENABLED=false`
+- `ADMIN_LOGIN_SECRET_HASH`
+
+临时 Admin Web 登录还必须配置 API-only 的 `ADMIN_LOGIN_SECRET_HASH`。生产环境不配置 `NEXT_PUBLIC_ADMIN_LOGIN_SECRET_HASH`，也不发送 `X-Dev-User`。
 - `WECHAT_APP_ID`
 - `WECHAT_APP_SECRET`
 - 未来启用时的 `CASDOOR_*` server-only credentials
@@ -267,9 +277,13 @@ Admin 项目 `u-app-admin` 使用 repository root，Next.js Framework Preset，�
 
 不要在 Vercel 前端项目中配置 `DATABASE_URL`、`AUTH_SESSION_SECRET`、`CASDOOR_CLIENT_SECRET` 或 `WECHAT_APP_SECRET`。
 
+### H5 Student ENV
+
+H5 登录使用 `GET /api/v1/auth/web/student/options` 和 `POST /api/v1/auth/web/student/login`。学生选择真实 roster 中的班级、姓名并提交学号后四位；API 签发 `qzu_web_session` HttpOnly/Secure/SameSite=Lax cookie。H5 不发送 `X-Dev-User`，也不把 `userId` 或 `studentId` 交给客户端指定。
+
 ### 微信 ENV
 
-API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，同时签发 HttpOnly session cookie 和小程序 bearer session。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5/PWA 仍需后续登录方案，不会使用 Dev Auth 冒充生产身份。
+API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，同时签发 HttpOnly session cookie 和小程序 bearer session。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5 使用上面的 roster 登录，不会使用 Dev Auth 冒充生产身份。
 
 ### Casdoor ENV
 

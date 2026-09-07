@@ -12,13 +12,13 @@ export default function ProjectsPage() {
   const [error, setError] = useState(false)
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ name: '', type: 'COURSE' as Project['type'], startDate: new Date().toISOString().slice(0, 10), endDate: '', description: '' })
-  const loadProjects = () => { void fetch(`${apiBase}/api/v1/projects`).then((response) => response.json()).then((value: { items: Project[] }) => setProjects(value.items)).catch(() => setError(true)) }
+  const loadProjects = () => { void fetch(`${apiBase}/api/v1/projects`, { credentials: 'include' }).then((response) => response.json()).then((value: { items: Project[] }) => setProjects(value.items)).catch(() => setError(true)) }
   useEffect(() => { loadProjects() }, [])
   const createProject = async () => {
     if (!form.name || !form.startDate) return
     setCreating(true)
     try {
-      const response = await fetch(`${apiBase}/api/v1/projects`, { method: 'POST', headers: adminHeaders, body: JSON.stringify({ name: form.name, description: form.description || null, type: form.type, timezone: 'Asia/Shanghai', effectiveStartDate: form.startDate, effectiveEndDate: form.endDate || null }) })
+      const response = await fetch(`${apiBase}/api/v1/projects`, { method: 'POST', headers: adminHeaders, credentials: 'include', body: JSON.stringify({ name: form.name, description: form.description || null, type: form.type, timezone: 'Asia/Shanghai', effectiveStartDate: form.startDate, effectiveEndDate: form.endDate || null }) })
       if (!response.ok) throw new Error('create failed')
       setForm({ ...form, name: '', description: '' }); loadProjects()
     } catch { setError(true) } finally { setCreating(false) }

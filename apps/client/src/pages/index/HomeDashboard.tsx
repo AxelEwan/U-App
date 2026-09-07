@@ -1,7 +1,7 @@
 import { Input, Picker, Text, View } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import { useEffect, useState } from 'react'
-import type { OnboardingResponse, SessionSummary, TodayResponse } from '@qzu/contracts'
+import type { OnboardingResponse, SessionSummary, TodayResponse, WebStudentClassOption } from '@qzu/contracts'
 
 import { useCountdown } from '../../hooks/useCountdown'
 import { useSessionStatus } from '../../hooks/useSessionStatus'
@@ -15,6 +15,27 @@ function timeRange(session: SessionSummary): string {
 function statusLabel(status: ReturnType<typeof useSessionStatus>): string {
   const labels: Record<ReturnType<typeof useSessionStatus>, string> = { UPCOMING: '未开始', CHECKIN_OPEN: '签到开放', IN_PROGRESS: '进行中', CHECKIN_CLOSED: '签到已截止', ENDED: '已结束' }
   return labels[status]
+}
+
+function WebStudentLogin() {
+  const { apiRepository } = useMock()
+  const [classes, setClasses] = useState<readonly WebStudentClassOption[]>([])
+  const [classId, setClassId] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [last4, setLast4] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const currentClass = classes.find((item) => item.id === classId) ?? classes[0]
+  useEffect(() => { void apiRepository.getWebStudentLoginOptions().then((value) => { setClasses(value.classes); setClassId(value.classes[0]?.id ?? '') }).catch(() => setFailed(true)) }, [apiRepository])
+  const login = async () => {
+    if (!currentClass || !displayName || !/^\d{4}$/.test(last4)) return
+    setBusy(true); setFailed(false)
+    try {
+      await apiRepository.loginWebStudent({ classId: currentClass.id, displayName, studentNoLast4: last4 })
+      await Taro.reLaunch({ url: '/pages/index/index' })
+    } catch { setFailed(true) } finally { setBusy(false) }
+  }
+  return <View className="card"><Text className="tag tag-primary">学生登录</Text><Text className="card-title" style={{ marginTop: 10 }}>绑定真实学生身份</Text><Text className="card-meta">请选择班级和姓名，再输入学号后四位。服务端只会校验真实 roster。</Text>{failed ? <Text className="card-meta">登录失败，请确认信息或稍后重试。</Text> : null}{classes.length ? <><Picker mode="selector" range={classes.map((item) => `${item.name} · ${item.classCode}`)} value={Math.max(0, classes.findIndex((item) => item.id === currentClass?.id))} onChange={(event) => { setClassId(classes[Number(event.detail.value)]?.id ?? ''); setDisplayName('') }}><View className="primary-button">{currentClass ? `${currentClass.name} · ${currentClass.classCode}` : '选择班级'}</View></Picker><Picker mode="selector" range={currentClass?.studentNames ?? []} value={Math.max(0, currentClass?.studentNames.indexOf(displayName) ?? -1)} onChange={(event) => setDisplayName(currentClass?.studentNames[Number(event.detail.value)] ?? '')}><View className="secondary-button">{displayName || '选择姓名'}</View></Picker><Input className="text-input" type="number" maxlength={4} placeholder="学号后四位" value={last4} onInput={(event) => setLast4(event.detail.value)} /><View className="primary-button" onClick={() => { if (!busy) void login() }}>{busy ? '登录中…' : '进入我的课表'}</View></> : <Text className="card-meta">当前没有可用班级 roster，请先由管理员导入。</Text>}</View>
 }
 
 export function HomeActiveCheckin({ session, clockOffset, onCheckIn }: { readonly session: SessionSummary; readonly clockOffset: number; readonly onCheckIn: () => Promise<void> }) {
@@ -83,7 +104,7 @@ export default function HomeDashboard() {
   }, [apiRepository])
   useEffect(() => { void apiRepository.getOnboarding().then((value) => { if (value.classOptions.length && value.status !== 'READY') setOnboarding(value) }).catch(() => undefined) }, [apiRepository])
   if (onboarding) return <StudentOnboarding value={onboarding} onChange={setOnboarding} />
-  if (error) return <View className="empty-state"><Text className="empty-title">暂时无法读取今日安排</Text><Text className="empty-copy">请先在微信小程序完成登录；H5 预览不会伪造生产身份。</Text></View>
+  if (error) return process.env.TARO_ENV === 'weapp' ? <View className="empty-state"><Text className="empty-title">暂时无法读取今日安排</Text><Text className="empty-copy">请先完成微信登录，或稍后重试。</Text></View> : <WebStudentLogin />
   if (!today) return <View className="card"><Text className="card-meta">正在读取今日安排…</Text></View>
   const list = today.todaySessions
   return <>

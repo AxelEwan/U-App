@@ -34,7 +34,11 @@ async function applyCleanMigrations(url: string): Promise<mysql.Pool> {
 }
 
 if (!databaseUrl) {
-  describe('MySQL integration', () => { it.skip('requires MYSQL_INTEGRATION_DATABASE_URL', () => undefined) })
+  if (process.env.MYSQL_INTEGRATION_REQUIRED === 'true') {
+    describe('MySQL integration', () => { it('requires MYSQL_INTEGRATION_DATABASE_URL', () => { throw new Error('MYSQL_INTEGRATION_DATABASE_URL must target a dedicated empty non-production MySQL database') }) })
+  } else {
+    describe.skip('MySQL integration', () => { it('requires MYSQL_INTEGRATION_DATABASE_URL', () => undefined) })
+  }
 } else {
 describe('MySQL integration', () => it('persists the class attendance flow in MySQL', async () => {
   const url = databaseUrl
@@ -65,8 +69,12 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
     ], admin)
     expect(imported.imported).toBe(2)
 
-    const session = await repository.createMiniProgramSession('integration-openid-a')
     const classId = semester.classes[0]!.id
+    const webSession = await repository.createWebStudentSession(classId, 'Fictional Student B', '0043')
+    expect((await repository.resolveWebSession(webSession.token))?.identityProvider).toBe('H5_WEB')
+    const adminWebSession = await repository.createAdminWebSession()
+    expect((await repository.resolveWebSession(adminWebSession.token))?.capabilities.canManageProjects).toBe(true)
+    const session = await repository.createMiniProgramSession('integration-openid-a')
     const onboarding = await repository.verifyStudent(session.userId, classId, 'Fictional Student A', '0042', 'integration-openid-a')
     expect(onboarding.status).toBe('NEEDS_ELECTIVES')
     await repository.enrollElectives(session.userId, [semester.courses.find((course) => course.kind === 'ELECTIVE')!.id])
@@ -90,8 +98,11 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
     const live = await repository.finalizeAttendance(first.id, admin, new Date(start.getTime() + 15 * 60_000))
     expect(live.records.length).toBeGreaterThanOrEqual(1)
     const member = live.members.find((item) => item.userId === session.userId)!
+    const record = live.records.find((item) => item.projectMemberId === member.projectMemberId)!
     const changed = await repository.updateAttendance(first.id, { projectMemberId: member.projectMemberId, status: 'LEAVE' }, admin)
     expect(changed.status).toBe('LEAVE')
+    const [auditRows] = await pool.query('SELECT COUNT(*) AS count FROM attendance_audit_logs WHERE attendance_record_id = ?', [record.id]) as [{ count: number }[], unknown]
+    expect(Number(auditRows[0]?.count ?? 0)).toBeGreaterThan(0)
     const csv = await repository.exportAttendanceCsv(first.id)
     expect(csv.startsWith('\uFEFF')).toBe(true)
     expect(csv).toContain('Fictional Student A')

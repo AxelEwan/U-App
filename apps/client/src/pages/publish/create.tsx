@@ -14,9 +14,10 @@ const initialForm: CreateTaskInput = {
 }
 
 export default function CreatePublishPage() {
-  const { state, apiRepository } = useMock()
+  const { state, apiRepository, isDevelopment } = useMock()
   const [form, setForm] = useState<CreateTaskInput>(initialForm)
   const [customFields, setCustomFields] = useState<CustomFieldDraft[]>([])
+  if (!isDevelopment) return <PageShell eyebrow="ADMIN WEB" title="请使用管理端" subtitle="生产签到工作台位于 qzu-admin.x-lab.top。客户端不会在生产环境创建项目。" />
   if (!state.currentUser.capabilities.canManageProjects) return <PageShell title="没有权限" subtitle="管理员才能创建签到任务。" />
   const update = <K extends keyof CreateTaskInput>(key: K, value: CreateTaskInput[K]) => setForm((current) => ({ ...current, [key]: value }))
   const toggleWeekday = (weekday: number) => update('weekdays', form.weekdays.includes(weekday) ? form.weekdays.filter((item) => item !== weekday) : [...form.weekdays, weekday])

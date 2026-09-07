@@ -1530,7 +1530,7 @@
         },
         "auth_method": {
           "name": "auth_method",
-          "type": "enum('CASDOOR','WECHAT_CONFIRMATION','DEV')",
+          "type": "enum('CASDOOR','WECHAT_CONFIRMATION','H5_STUDENT','ADMIN_PASSWORD','DEV')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

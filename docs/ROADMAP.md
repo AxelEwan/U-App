@@ -12,15 +12,15 @@
 
 ## Current
 
-- M0, M1, M1.5, M1.5.1, M2, the code portion of M3, and the first Scope Reset application flow are complete in the repository. `apps/api/.env.local` is absent in this workspace, so no database preflight or migration was executed. MySQL adapters now persist fixed semester configuration, roster, binding, elective enrollment, session start, live attendance, overrides, finalization, and CSV data; the provider-backed production login boundary still awaits WeChat/Casdoor integration. The migration chain is `0000_clean_baseline.sql` plus additive `0001`–`0003` files.
+- M0, M1, M1.5, M1.5.1, M2, the code portion of M3, the first Scope Reset flow, and the temporary Web MVP auth boundary are complete in the repository. `apps/api/.env.local` is absent in this workspace, so no database preflight or migration was executed. MySQL adapters now persist fixed semester configuration, roster, binding, elective enrollment, session start, live attendance, overrides, finalization, CSV data, and opaque Web sessions; the dedicated MySQL integration still must run before production approval. The migration chain is `0000_clean_baseline.sql` plus additive `0001`–`0003` files.
 
 ## Next
 
-- Next: connect the production WeChat login/session boundary, then validate the fixed semester flow against a disposable MySQL database before any production migration approval.
+- Next: run the fixed semester and NORMAL attendance flow against a disposable MySQL database, then perform the production preflight before any migration approval. WeChat linking and Casdoor can follow this Web MVP.
 
 ## Deferred
 
-- Production Casdoor OIDC and WeChat code2Session until credentials/application configuration exist.
+- Production Casdoor OIDC and live WeChat code2Session verification until credentials/application configuration exist.
 - H5 mini-program-confirmed QR login UI/flow.
 - Provider-backed user login, PASSCODE/LOCATION/QR attendance, XLSX, full PWA/offline caching, notifications, native apps, Live Activity, Redis, advanced RBAC, billing, multi-tenancy, and production deployment hardening.
 

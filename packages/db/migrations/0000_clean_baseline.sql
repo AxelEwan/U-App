@@ -177,7 +177,7 @@ CREATE TABLE `web_auth_sessions` (
 	`id` varchar(36) NOT NULL,
 	`user_id` varchar(36) NOT NULL,
 	`token_hash` char(64) NOT NULL,
-	`auth_method` enum('CASDOOR','WECHAT_CONFIRMATION','DEV') NOT NULL,
+	`auth_method` enum('CASDOOR','WECHAT_CONFIRMATION','H5_STUDENT','ADMIN_PASSWORD','DEV') NOT NULL,
 	`created_at` timestamp(3) NOT NULL DEFAULT (now()),
 	`expires_at` timestamp(3) NOT NULL,
 	`revoked_at` timestamp(3),

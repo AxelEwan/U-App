@@ -27,6 +27,7 @@ import {
   type TimetableResponse,
   type UpdateProjectInput,
   type UpdateScheduleRuleInput,
+  type WebStudentClassOption,
 } from '@qzu/contracts'
 import { applyAttendanceAction, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes, DomainError } from '@qzu/core'
 import type { AuthContext } from '@qzu/auth'
@@ -71,6 +72,10 @@ export interface BusinessRepository {
   finalizeAttendance(sessionId: string, actor: AuthContext, now?: Date): Promise<AttendanceLiveResponse>
   exportAttendanceCsv(sessionId: string): Promise<string>
   importRoster(semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<RosterImportResult>
+  listWebStudentLoginOptions(): Promise<readonly WebStudentClassOption[]>
+  createWebStudentSession(classId: string, displayName: string, studentNoLast4: string): Promise<{ userId: string; token: string; displayName: string }>
+  createAdminWebSession(): Promise<{ userId: string; token: string; displayName: string }>
+  resolveWebSession(token: string): Promise<AuthContext | null>
   createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }>
   resolveMiniProgramSession(token: string): Promise<AuthContext | null>
 }
@@ -106,6 +111,7 @@ export class MemoryBusinessRepository implements BusinessRepository {
   private readonly electiveEnrollments = new Set<string>()
   private readonly fixedSessions = new Map<string, FixedSession>()
   private readonly miniSessions = new Map<string, { userId: string; expiresAt: number }>()
+  private readonly webSessions = new Map<string, { userId: string; admin: boolean; expiresAt: number }>()
   public constructor() {
     for (const projectId of Object.values(projectIds)) {
       this.members.set(projectId, [{ id: crypto.randomUUID(), projectId, userId: '00000000-0000-4000-8000-000000000011', displayName: 'Dev Student', externalCode: null }])
@@ -204,6 +210,41 @@ export class MemoryBusinessRepository implements BusinessRepository {
     return Promise.resolve({ userId, token, displayName: this.fixedStudents.get(existing ?? '')?.displayName ?? '微信用户' })
   }
   resolveMiniProgramSession(token: string): Promise<AuthContext | null> { const value = this.miniSessions.get(token); if (!value || value.expiresAt <= Date.now()) return Promise.resolve(null); return Promise.resolve({ userId: value.userId, displayName: this.fixedStudents.get(this.studentByUser.get(value.userId) ?? '')?.displayName ?? '微信用户', identityProvider: 'WECHAT_MINIPROGRAM', sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: false } }) }
+
+  listWebStudentLoginOptions(): Promise<readonly WebStudentClassOption[]> {
+    if (!this.semester) return Promise.resolve([])
+    return Promise.resolve(this.semester.classes.map((classValue) => ({ id: classValue.id, classCode: classValue.classCode, name: classValue.name, studentNames: [...this.fixedStudents.values()].filter((student) => student.classId === classValue.id && student.active).map((student) => student.displayName).sort() })))
+  }
+
+  createWebStudentSession(classId: string, displayName: string, studentNoLast4: string): Promise<{ userId: string; token: string; displayName: string }> {
+    if (!this.semester || !this.semester.classes.some((item) => item.id === classId)) throw new RepositoryError('NOT_FOUND', 'Class not found')
+    const student = [...this.fixedStudents.values()].find((item) => item.classId === classId && item.active && item.displayName === displayName && item.studentNo.endsWith(studentNoLast4))
+    if (!student) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
+    let userId = [...this.studentByUser.entries()].find(([, studentId]) => studentId === student.id)?.[0]
+    if (!userId) {
+      userId = crypto.randomUUID()
+      this.studentByUser.set(userId, student.id)
+      this.studentBySubject.set(`h5:${student.id}`, student.id)
+    }
+    this.refreshStudentMembership(student)
+    const token = crypto.randomUUID() + crypto.randomUUID()
+    this.webSessions.set(token, { userId, admin: false, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
+    return Promise.resolve({ userId, token, displayName: student.displayName })
+  }
+
+  createAdminWebSession(): Promise<{ userId: string; token: string; displayName: string }> {
+    const userId = '00000000-0000-4000-8000-0000000000ad'
+    const token = crypto.randomUUID() + crypto.randomUUID()
+    this.webSessions.set(token, { userId, admin: true, expiresAt: Date.now() + 12 * 60 * 60_000 })
+    return Promise.resolve({ userId, token, displayName: '管理员' })
+  }
+
+  resolveWebSession(token: string): Promise<AuthContext | null> {
+    const value = this.webSessions.get(token)
+    if (!value || value.expiresAt <= Date.now()) return Promise.resolve(null)
+    const student = this.fixedStudents.get(this.studentByUser.get(value.userId) ?? '')
+    return Promise.resolve({ userId: value.userId, displayName: value.admin ? '管理员' : student?.displayName ?? '学生', identityProvider: value.admin ? 'ADMIN_PASSWORD' : 'H5_WEB', ...(value.admin ? {} : { identitySubject: `h5:${student?.id ?? value.userId}` }), sessionType: 'WEB', capabilities: { canManageProjects: value.admin } })
+  }
 
   syncSemesterConfig(input: SemesterConfigInput, actor: AuthContext): Promise<SemesterConfigResponse> {
     void actor

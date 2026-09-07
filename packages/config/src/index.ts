@@ -19,6 +19,7 @@ const apiEnvSchema = z
     DATABASE_URL: optionalSecret.pipe(z.string().url().optional()),
     CORS_ORIGINS: z.string().default('http://localhost:3000,http://localhost:10086'),
     AUTH_SESSION_SECRET: optionalSecret,
+    ADMIN_LOGIN_SECRET_HASH: optionalSecret,
     DEV_AUTH_ENABLED: booleanFromString,
     CASDOOR_ISSUER: z.string().url().default('https://auth.x-lab.top'),
     CASDOOR_CLIENT_ID: optionalSecret,
@@ -26,7 +27,7 @@ const apiEnvSchema = z
     CASDOOR_ADMIN_MODE: z.enum(['all_authenticated']).optional(),
     WECHAT_APP_ID: optionalSecret,
     WECHAT_APP_SECRET: optionalSecret,
-    PUBLIC_H5_URL: z.string().url().default('https://qzu.x-lab.top'),
+    PUBLIC_H5_URL: z.string().url().default('https://u.x-lab.top'),
     PUBLIC_ADMIN_URL: z.string().url().default('https://qzu-admin.x-lab.top'),
     PUBLIC_API_URL: z.string().url().default('https://api-u.x-lab.top'),
   })
@@ -44,6 +45,13 @@ const apiEnvSchema = z
         code: 'custom',
         path: ['AUTH_SESSION_SECRET'],
         message: 'AUTH_SESSION_SECRET is required in production',
+      })
+    }
+    if (isProduction && !env.ADMIN_LOGIN_SECRET_HASH) {
+      context.addIssue({
+        code: 'custom',
+        path: ['ADMIN_LOGIN_SECRET_HASH'],
+        message: 'ADMIN_LOGIN_SECRET_HASH is required in production',
       })
     }
     if (isProduction && env.REPOSITORY_MODE !== 'mysql') {

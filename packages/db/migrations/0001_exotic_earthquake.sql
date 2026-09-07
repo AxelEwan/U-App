@@ -57,12 +57,12 @@ CREATE TABLE `student_bindings` (
 	`id` varchar(36) NOT NULL,
 	`student_id` varchar(36) NOT NULL,
 	`user_id` varchar(36) NOT NULL,
-	`provider` enum('WECHAT_MINIPROGRAM') NOT NULL DEFAULT 'WECHAT_MINIPROGRAM',
+	`provider` enum('WECHAT_MINIPROGRAM','H5_WEB') NOT NULL DEFAULT 'WECHAT_MINIPROGRAM',
 	`provider_subject` varchar(255) NOT NULL,
 	`created_at` timestamp(3) NOT NULL DEFAULT (now()),
 	`updated_at` timestamp(3) NOT NULL DEFAULT (now()),
 	CONSTRAINT `student_bindings_id` PRIMARY KEY(`id`),
-	CONSTRAINT `student_bindings_student_uq` UNIQUE(`student_id`),
+	CONSTRAINT `student_bindings_student_provider_uq` UNIQUE(`student_id`,`provider`),
 	CONSTRAINT `student_bindings_user_uq` UNIQUE(`user_id`),
 	CONSTRAINT `student_bindings_subject_uq` UNIQUE(`provider`,`provider_subject`)
 );

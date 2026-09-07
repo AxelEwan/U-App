@@ -18,6 +18,9 @@ import {
   startAttendanceInputSchema,
   rosterImportInputSchema,
   wechatLoginInputSchema,
+  webStudentLoginInputSchema,
+  webStudentLoginOptionsResponseSchema,
+  adminLoginInputSchema,
   healthResponseSchema,
   meResponseSchema,
   projectsResponseSchema,
@@ -33,7 +36,9 @@ import {
 import { requireAdmin, type AuthContext } from '@qzu/auth'
 import { DomainError } from '@qzu/core'
 import { Hono } from 'hono'
+import type { Context } from 'hono'
 import { cors } from 'hono/cors'
+import { scryptSync, timingSafeEqual } from 'node:crypto'
 
 import { MemoryBusinessRepository, RepositoryError, type BusinessRepository } from './repository'
 
@@ -44,6 +49,10 @@ export interface ApiRuntimeConfig {
   readonly resolveMiniProgramSession?: (token: string) => Promise<AuthContext | null>
   readonly createMiniProgramSession?: (providerSubject: string) => Promise<{ userId: string; token: string; displayName: string }>
   readonly exchangeWechatCode?: (code: string) => Promise<string>
+  readonly resolveWebSession?: (token: string) => Promise<AuthContext | null>
+  readonly createWebStudentSession?: (classId: string, displayName: string, studentNoLast4: string) => Promise<{ userId: string; token: string; displayName: string }>
+  readonly createAdminWebSession?: () => Promise<{ userId: string; token: string; displayName: string }>
+  readonly adminLoginSecretHash?: string
 }
 type ApiVariables = { requestId: string }
 type ApiEnv = { Variables: ApiVariables }
@@ -67,7 +76,7 @@ const DEV_USERS = {
   admin: { userId: '00000000-0000-4000-8000-000000000012', displayName: 'Dev Admin', canManageProjects: true },
 } as const
 
-async function resolveAuth(request: Request, enabled: boolean, resolveMiniProgramSession?: (token: string) => Promise<AuthContext | null>): Promise<AuthContext | null> {
+async function resolveAuth(request: Request, enabled: boolean, resolveMiniProgramSession?: (token: string) => Promise<AuthContext | null>, resolveWebSession?: (token: string) => Promise<AuthContext | null>): Promise<AuthContext | null> {
   if (enabled) {
     const key = request.headers.get('X-Dev-User') as keyof typeof DEV_USERS | null
     const user = key ? DEV_USERS[key] : undefined
@@ -76,12 +85,31 @@ async function resolveAuth(request: Request, enabled: boolean, resolveMiniProgra
   const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get('Authorization') ?? '')?.[1]
   const cookie = /(?:^|;)\s*qzu_mini_session=([^;]+)/.exec(request.headers.get('Cookie') ?? '')?.[1]
   const token = bearer ?? cookie
-  return token && resolveMiniProgramSession ? resolveMiniProgramSession(token) : null
+  if (token && resolveMiniProgramSession) return resolveMiniProgramSession(token)
+  const webCookie = /(?:^|;)\s*qzu_web_session=([^;]+)/.exec(request.headers.get('Cookie') ?? '')?.[1]
+  return webCookie && resolveWebSession ? resolveWebSession(webCookie) : null
 }
 
-function adminContext(request: Request, enabled: boolean, resolveMiniProgramSession?: (token: string) => Promise<AuthContext | null>): Promise<AuthContext> {
-  const context = resolveAuth(request, enabled, resolveMiniProgramSession)
+function adminContext(request: Request, enabled: boolean, resolveMiniProgramSession?: (token: string) => Promise<AuthContext | null>, resolveWebSession?: (token: string) => Promise<AuthContext | null>): Promise<AuthContext> {
+  const context = resolveAuth(request, enabled, resolveMiniProgramSession, resolveWebSession)
   return context.then((value) => requireAdmin({ context: value, mode: 'all_authenticated', policy: { isProjectAdmin: () => Promise.resolve(false), isSystemAdmin: () => Promise.resolve(false) } }))
+}
+
+function setWebSessionCookie(context: Context<ApiEnv>, token: string): void {
+  context.header('Set-Cookie', `qzu_web_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`)
+}
+
+function verifyAdminPassword(password: string, encoded: string): boolean {
+  const parts = encoded.split('$')
+  if (parts.length !== 6 || parts[0] !== 'scrypt') return false
+  const n = Number(parts[1]); const r = Number(parts[2]); const p = Number(parts[3])
+  if (![n, r, p].every(Number.isSafeInteger) || n < 16_384 || r < 1 || p < 1) return false
+  try {
+    const salt = Buffer.from(parts[4]!, 'base64')
+    const expected = Buffer.from(parts[5]!, 'base64')
+    const actual = scryptSync(password, salt, expected.length, { N: n, r, p, maxmem: 64 * 1024 * 1024 })
+    return actual.length === expected.length && timingSafeEqual(actual, expected)
+  } catch { return false }
 }
 
 export function createApp(config: ApiRuntimeConfig) {
@@ -89,7 +117,7 @@ export function createApp(config: ApiRuntimeConfig) {
   const repository = config.repository ?? new MemoryBusinessRepository()
   const app = new Hono<ApiEnv>()
   app.use('*', async (context, next) => { const requestId = context.req.header('X-Request-Id')?.slice(0, 128) || crypto.randomUUID(); context.set('requestId', requestId); context.header('X-Request-Id', requestId); await next() })
-  app.use('*', cors({ origin: (origin) => allowedOrigins.has(origin) ? origin : undefined, allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'X-Request-Id', 'Authorization', 'X-Dev-User'], credentials: true, maxAge: 600 }))
+  app.use('*', cors({ origin: (origin) => allowedOrigins.has(origin) ? origin : undefined, allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'X-Request-Id', 'Authorization', ...(config.devAuthEnabled ? ['X-Dev-User'] : [])], credentials: true, maxAge: 600 }))
   app.use('*', async (context, next) => { const startedAt = performance.now(); await next(); console.log(JSON.stringify({ level: 'info', event: 'http_request', requestId: context.get('requestId'), method: context.req.method, path: context.req.path, status: context.res.status, durationMs: Math.round((performance.now() - startedAt) * 100) / 100 })) })
 
   app.get('/health', (context) => context.json(healthResponseSchema.parse({ status: 'ok', service: 'qzu-api', timestamp: new Date().toISOString() })))
@@ -102,14 +130,35 @@ export function createApp(config: ApiRuntimeConfig) {
     context.header('Set-Cookie', `qzu_mini_session=${session.token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`)
     return context.json({ userId: session.userId, displayName: session.displayName, token: session.token })
   })
+  app.get('/api/v1/auth/web/student/options', async (context) => {
+    if (!config.repository) return context.json({ classes: [] })
+    return context.json(webStudentLoginOptionsResponseSchema.parse({ classes: await config.repository.listWebStudentLoginOptions() }))
+  })
+  app.post('/api/v1/auth/web/student/login', async (context) => {
+    if (!config.createWebStudentSession) throw new ApiError('AUTHENTICATION_REQUIRED', 'H5 student login is not configured')
+    const input = webStudentLoginInputSchema.safeParse(await context.req.json())
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid H5 student login input', input.error.flatten())
+    const session = await config.createWebStudentSession(input.data.classId, input.data.displayName, input.data.studentNoLast4)
+    setWebSessionCookie(context, session.token)
+    return context.json({ userId: session.userId, displayName: session.displayName })
+  })
+  app.post('/api/v1/auth/admin/login', async (context) => {
+    if (!config.adminLoginSecretHash || !config.createAdminWebSession) throw new ApiError('AUTHENTICATION_REQUIRED', 'Admin login is not configured')
+    const input = adminLoginInputSchema.safeParse(await context.req.json())
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid admin login input', input.error.flatten())
+    if (!verifyAdminPassword(input.data.password, config.adminLoginSecretHash)) throw new ApiError('UNAUTHORIZED', 'Invalid administrator password')
+    const session = await config.createAdminWebSession()
+    setWebSessionCookie(context, session.token)
+    return context.json({ userId: session.userId, displayName: session.displayName })
+  })
   app.get('/api/v1/me', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     return context.json(meResponseSchema.parse({ ...auth, userId: auth.userId, displayName: auth.displayName ?? '用户' }))
   })
   app.get('/api/v1/projects', async (context) => context.json(projectsResponseSchema.parse({ items: await repository.listProjects() })))
   app.post('/api/v1/projects', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = createProjectInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid project input', input.error.flatten())
     return context.json(await repository.createProject(input.data, auth), 201)
@@ -120,7 +169,7 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(project)
   })
   app.patch('/api/v1/projects/:id', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = updateProjectInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid project input', input.error.flatten())
     const project = await repository.updateProject(context.req.param('id'), input.data)
@@ -128,12 +177,12 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(project)
   })
   app.get('/api/v1/projects/:id/members', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!(await repository.getProject(context.req.param('id')))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     return context.json(projectMembersResponseSchema.parse({ items: await repository.listMembers(context.req.param('id')) }))
   })
   app.post('/api/v1/projects/:id/members', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const projectId = context.req.param('id')
     if (!(await repository.getProject(projectId))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     const input = createProjectMemberInputSchema.safeParse(await context.req.json())
@@ -145,7 +194,7 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json({ items: (await repository.listScheduleRules(context.req.param('id'))).map((item) => scheduleRuleSchema.parse(item)) })
   })
   app.post('/api/v1/projects/:id/schedule-rules', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const projectId = context.req.param('id')
     if (!(await repository.getProject(projectId))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     const input = createScheduleRuleInputSchema.safeParse(await context.req.json())
@@ -153,7 +202,7 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(scheduleRuleSchema.parse(await repository.createScheduleRule(projectId, input.data)), 201)
   })
   app.patch('/api/v1/schedule-rules/:id', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = updateScheduleRuleInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid schedule rule', input.error.flatten())
     const rule = await repository.updateScheduleRule(context.req.param('id'), input.data)
@@ -161,7 +210,7 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(scheduleRuleSchema.parse(rule))
   })
   app.post('/api/v1/projects/:id/attendance-policy', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = createAttendancePolicyInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid attendance policy', input.error.flatten())
     return context.json(attendancePolicySchema.parse(await repository.upsertAttendancePolicy(context.req.param('id'), input.data)), 201)
@@ -171,7 +220,7 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(sessionsResponseSchema.parse({ items: await repository.listSessions(context.req.param('id')) }))
   })
   app.post('/api/v1/projects/:id/sessions/generate', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const projectId = context.req.param('id')
     if (!(await repository.getProject(projectId))) throw new ApiError('PROJECT_NOT_FOUND', 'Project not found')
     const input = generateSessionsInputSchema.safeParse(await context.req.json())
@@ -184,21 +233,21 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(value)
   })
   app.post('/api/v1/sessions/:id/check-in', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const input = checkInInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid check-in input', input.error.flatten())
     return context.json(attendanceRecordSchema.parse(await repository.checkIn(context.req.param('id'), auth.userId, input.data)), 201)
   })
   app.post('/api/v1/sessions/:id/attendance/start', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = startAttendanceInputSchema.safeParse(await context.req.json().catch(() => ({})))
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid attendance start input', input.error.flatten())
     const session = await repository.startAttendance(context.req.param('id'), input.data.durationMinutes, auth)
     return context.json(session)
   })
   app.get('/api/v1/sessions/:id/attendance', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const session = await repository.getSession(context.req.param('id'))
     if (!session) throw new ApiError('SESSION_NOT_FOUND', 'Session not found')
@@ -207,69 +256,69 @@ export function createApp(config: ApiRuntimeConfig) {
     return context.json(attendanceRecordsResponseSchema.parse({ items: visible }))
   })
   app.get('/api/v1/sessions/:id/attendance/live', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     return context.json(attendanceLiveResponseSchema.parse(await repository.getLiveAttendance(context.req.param('id'))))
   })
   app.patch('/api/v1/sessions/:id/attendance', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = attendanceAdminActionInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid attendance action', input.error.flatten())
     return context.json(attendanceRecordSchema.parse(await repository.updateAttendance(context.req.param('id'), input.data, auth)))
   })
   app.post('/api/v1/sessions/:id/attendance/finalize', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     return context.json(attendanceLiveResponseSchema.parse(await repository.finalizeAttendance(context.req.param('id'), auth)))
   })
   app.get('/api/v1/sessions/:id/attendance.csv', async (context) => {
-    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const csv = await repository.exportAttendanceCsv(context.req.param('id'))
     return new Response(csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="attendance-${context.req.param('id')}.csv"` } })
   })
   app.post('/api/v1/admin/semester-config', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = semesterConfigInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid semester configuration', input.error.flatten())
     return context.json(semesterConfigResponseSchema.parse(await repository.syncSemesterConfig(input.data, auth)), 201)
   })
   app.post('/api/v1/admin/roster', async (context) => {
-    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await adminContext(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     const input = rosterImportInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid roster import', input.error.flatten())
     return context.json(await repository.importRoster(input.data.semesterCode, input.data.entries, auth), 201)
   })
   app.get('/api/v1/me/onboarding', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     return context.json(await repository.getOnboarding(auth.userId))
   })
   app.post('/api/v1/me/onboarding/class', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const input = chooseClassInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid class selection', input.error.flatten())
     return context.json(await repository.getOnboarding(auth.userId))
   })
   app.post('/api/v1/me/onboarding/verify', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const input = verifyStudentInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid student verification', input.error.flatten())
     return context.json(await repository.verifyStudent(auth.userId, input.data.classId, input.data.displayName, input.data.studentNoLast4, auth.identitySubject ?? `${auth.identityProvider}:${auth.userId}`))
   })
   app.post('/api/v1/me/onboarding/electives', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const input = enrollElectivesInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid elective selection', input.error.flatten())
     return context.json(await repository.enrollElectives(auth.userId, input.data.courseIds))
   })
   app.get('/api/v1/me/today', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     return context.json(todayResponseSchema.parse(await repository.getToday(auth.userId)))
   })
   app.get('/api/v1/me/timetable', async (context) => {
-    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     return context.json(timetableResponseSchema.parse(await repository.getTimetable(auth.userId)))
   })

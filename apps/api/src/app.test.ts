@@ -1,9 +1,43 @@
 import { attendanceRecordsResponseSchema, healthResponseSchema, projectSummarySchema, timetableResponseSchema, todayResponseSchema } from '@qzu/contracts'
 import { describe, expect, it } from 'vitest'
+import { scryptSync } from 'node:crypto'
 
 import { createApp } from './app'
 
 describe('API application', () => {
+  it('supports production-safe H5 student and temporary admin web sessions', async () => {
+    const repository = new (await import('./repository')).MemoryBusinessRepository()
+    const salt = Buffer.from('integration-salt-1234')
+    const adminHash = `scrypt$16384$8$1$${salt.toString('base64')}$${scryptSync('admin-password', salt, 64, { N: 16_384, r: 8, p: 1 }).toString('base64')}`
+    const app = createApp({
+      corsOrigins: ['https://u.x-lab.top'],
+      repository,
+      devAuthEnabled: true,
+      resolveMiniProgramSession: (token) => repository.resolveMiniProgramSession(token),
+      resolveWebSession: (token) => repository.resolveWebSession(token),
+      createWebStudentSession: (classId, displayName, last4) => repository.createWebStudentSession(classId, displayName, last4),
+      createAdminWebSession: () => repository.createAdminWebSession(),
+      adminLoginSecretHash: adminHash,
+    })
+    const adminLogin = await app.request('/api/v1/auth/admin/login', { method: 'POST', body: JSON.stringify({ password: 'admin-password' }), headers: { 'Content-Type': 'application/json' } })
+    expect(adminLogin.status).toBe(200)
+    expect(adminLogin.headers.get('Set-Cookie')).toContain('HttpOnly')
+    const adminCookie = adminLogin.headers.get('Set-Cookie')!.split(';')[0]!
+    const config = await app.request('/api/v1/admin/semester-config', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: adminCookie }, body: JSON.stringify({ code: 'h5-test', name: 'H5 Test', startDate: '2026-09-01', endDate: '2026-09-30', standardPeriods: [{ period: 1, startTime: '09:00', endTime: '10:00' }], classes: [{ classCode: 'H5-01', name: 'H5 Test Class' }], courses: [{ courseCode: 'REQ-01', name: 'Real Course', kind: 'REQUIRED' }], timetable: [{ classCode: 'H5-01', courseCode: 'REQ-01', weekday: 2, startPeriod: 1, endPeriod: 1, startWeek: 1, endWeek: 4, weekPattern: 'ALL' }] }) })
+    expect(config.status).toBe(201)
+    const configBody = await config.json() as { classes: { id: string }[] }
+    const roster = await app.request('/api/v1/admin/roster', { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: adminCookie }, body: JSON.stringify({ semesterCode: 'h5-test', entries: [{ classCode: 'H5-01', studentNo: '20260042', displayName: 'Fictional H5 Student' }] }) })
+    expect(roster.status).toBe(201)
+    const options = await app.request('/api/v1/auth/web/student/options')
+    expect((await options.json() as { classes: { studentNames: string[] }[] }).classes[0]!.studentNames).toContain('Fictional H5 Student')
+    const studentLogin = await app.request('/api/v1/auth/web/student/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ classId: configBody.classes[0]!.id, displayName: 'Fictional H5 Student', studentNoLast4: '0042' }) })
+    expect(studentLogin.status).toBe(200)
+    const studentCookie = studentLogin.headers.get('Set-Cookie')!.split(';')[0]!
+    const me = await app.request('/api/v1/me', { headers: { Cookie: studentCookie } })
+    expect(me.status).toBe(200)
+    expect((await me.json() as { identityProvider: string }).identityProvider).toBe('H5_WEB')
+  })
+
   it('returns a validated health response and request ID', async () => {
     const app = createApp({ corsOrigins: ['http://localhost:3000'] })
     const response = await app.request('/health')

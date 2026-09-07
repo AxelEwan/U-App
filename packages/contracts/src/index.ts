@@ -78,6 +78,10 @@ export const enrollElectivesInputSchema = z.object({ courseIds: z.array(z.uuid()
 export const rosterEntrySchema = z.object({ classCode: z.string().trim().min(1).max(64), studentNo: z.string().trim().min(1).max(64), displayName: z.string().trim().min(1).max(120) })
 export const rosterImportInputSchema = z.object({ semesterCode: z.string().trim().min(1).max(32), entries: z.array(rosterEntrySchema).min(1).max(10_000) })
 export const wechatLoginInputSchema = z.object({ code: z.string().trim().min(1).max(512) })
+export const webStudentLoginInputSchema = verifyStudentInputSchema
+export const adminLoginInputSchema = z.object({ password: z.string().min(1).max(256) })
+export const webStudentClassOptionSchema = z.object({ id: z.uuid(), classCode: z.string(), name: z.string(), studentNames: z.array(z.string()) })
+export const webStudentLoginOptionsResponseSchema = z.object({ classes: z.array(webStudentClassOptionSchema) })
 export const startAttendanceInputSchema = z.object({ durationMinutes: z.number().int().min(1).max(180).default(10) })
 export const attendanceAdminActionSchema = z.enum(['PRESENT', 'LATE', 'LEAVE', 'ABSENT', 'VOID'])
 export const attendanceAdminActionInputSchema = z.object({ projectMemberId: z.uuid(), status: attendanceAdminActionSchema })
@@ -187,7 +191,7 @@ export const meResponseSchema = z.object({
   userId: z.uuid(),
   displayName: z.string().min(1),
   sessionType: z.enum(['WEB', 'MINI_PROGRAM', 'DEV']),
-  identityProvider: z.enum(['WECHAT_MINIPROGRAM', 'CASDOOR', 'DEV']),
+  identityProvider: z.enum(['WECHAT_MINIPROGRAM', 'CASDOOR', 'H5_WEB', 'ADMIN_PASSWORD', 'DEV']),
   capabilities: z.object({ canManageProjects: z.boolean() }),
 })
 
@@ -262,6 +266,10 @@ export type EnrollElectivesInput = z.infer<typeof enrollElectivesInputSchema>
 export type RosterEntry = z.infer<typeof rosterEntrySchema>
 export type RosterImportInput = z.infer<typeof rosterImportInputSchema>
 export type WechatLoginInput = z.infer<typeof wechatLoginInputSchema>
+export type WebStudentLoginInput = z.infer<typeof webStudentLoginInputSchema>
+export type AdminLoginInput = z.infer<typeof adminLoginInputSchema>
+export type WebStudentClassOption = z.infer<typeof webStudentClassOptionSchema>
+export type WebStudentLoginOptionsResponse = z.infer<typeof webStudentLoginOptionsResponseSchema>
 export type StartAttendanceInput = z.infer<typeof startAttendanceInputSchema>
 export type AttendanceAdminActionInput = z.infer<typeof attendanceAdminActionInputSchema>
 export type AttendanceLiveResponse = z.infer<typeof attendanceLiveResponseSchema>

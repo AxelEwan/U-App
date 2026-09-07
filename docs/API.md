@@ -66,6 +66,14 @@ Returns `{ serverTime, activeCheckin, nextSession, todaySessions }`. The API ret
 
 Exchanges a WeChat mini-program login code server-side and sets an HttpOnly session cookie. It is enabled only when the API has server-only WeChat credentials; Dev Auth is never used in production.
 
+### `GET /api/v1/auth/web/student/options`, `POST /api/v1/auth/web/student/login`
+
+The temporary H5 student login lists only active roster names and verifies the selected class, name, and last four digits of the student number against MySQL. Successful login sets an opaque `qzu_web_session` cookie. The client cannot choose a user or student ID.
+
+### `POST /api/v1/auth/admin/login`
+
+Verifies the submitted administrator password against the API-only `ADMIN_LOGIN_SECRET_HASH` and sets an HttpOnly `qzu_web_session` cookie with administrator capability. The password and hash are never public frontend variables.
+
 ### `POST /api/v1/admin/semester-config`
 
 Admin-only. Stores a versioned semester, classes, courses, standard periods, and fixed timetable, then materializes timetable entries into the existing Project/EventSession engine.

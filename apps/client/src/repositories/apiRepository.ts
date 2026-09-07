@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebStudentClassOption } from '@qzu/contracts'
 import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
@@ -33,6 +33,7 @@ export class ApiRepository implements ClientRepository {
     const response = await Taro.request<T>({
       ...options,
       url: `${this.baseUrl}${path}`,
+      credentials: 'include',
       header: { ...(options.header ?? {}), ...authHeader, ...devHeader },
     })
     if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`API request failed: ${response.statusCode}`)
@@ -70,6 +71,8 @@ export class ApiRepository implements ClientRepository {
   getMe(): Promise<MeResponse> { return this.request<MeResponse>('/api/v1/me') }
   getTimetable(): Promise<TimetableResponse> { return this.request<TimetableResponse>('/api/v1/me/timetable') }
   getOnboarding(): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding') }
+  getWebStudentLoginOptions(): Promise<{ classes: readonly WebStudentClassOption[] }> { return this.request<{ classes: readonly WebStudentClassOption[] }>('/api/v1/auth/web/student/options') }
+  loginWebStudent(input: VerifyStudentInput): Promise<{ userId: string; displayName: string }> { return this.request<{ userId: string; displayName: string }>('/api/v1/auth/web/student/login', { method: 'POST', data: input }) }
   verifyStudent(input: VerifyStudentInput): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding/verify', { method: 'POST', data: input }) }
   enrollElectives(input: EnrollElectivesInput): Promise<OnboardingResponse> { return this.request<OnboardingResponse>('/api/v1/me/onboarding/electives', { method: 'POST', data: input }) }
 }

@@ -1,4 +1,4 @@
-export type IdentityProvider = 'WECHAT_MINIPROGRAM' | 'CASDOOR' | 'DEV'
+export type IdentityProvider = 'WECHAT_MINIPROGRAM' | 'CASDOOR' | 'H5_WEB' | 'ADMIN_PASSWORD' | 'DEV'
 export type SessionType = 'WEB' | 'MINI_PROGRAM' | 'DEV'
 
 export interface AuthCapabilities {

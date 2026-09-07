@@ -1841,7 +1841,7 @@
         },
         "provider": {
           "name": "provider",
-          "type": "enum('WECHAT_MINIPROGRAM')",
+          "type": "enum('WECHAT_MINIPROGRAM','H5_WEB')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false,
@@ -1872,10 +1872,11 @@
         }
       },
       "indexes": {
-        "student_bindings_student_uq": {
-          "name": "student_bindings_student_uq",
+        "student_bindings_student_provider_uq": {
+          "name": "student_bindings_student_provider_uq",
           "columns": [
-            "student_id"
+            "student_id",
+            "provider"
           ],
           "isUnique": true
         },
@@ -2278,7 +2279,7 @@
         },
         "auth_method": {
           "name": "auth_method",
-          "type": "enum('CASDOOR','WECHAT_CONFIRMATION','DEV')",
+          "type": "enum('CASDOOR','WECHAT_CONFIRMATION','H5_STUDENT','ADMIN_PASSWORD','DEV')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false

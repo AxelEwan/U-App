@@ -18,7 +18,7 @@ Internal UUIDs are stable business keys. WeChat OpenID, Casdoor subject, email, 
 
 ## ADR-005: Casdoor for Admin only
 
-Casdoor closed registration supports current trusted administrators. `all_authenticated` is an explicit, replaceable authorization policy, never a permanent identity assumption. Ordinary H5 login will use mini-program confirmation.
+Casdoor remains the future Admin identity provider. Until it is configured, Admin Web uses a server-only scrypt password hash and an opaque web session; ordinary H5 uses a roster-bound class/name/last-four verification. Neither path trusts `X-Dev-User` in production.
 
 ## ADR-006: Privacy-minimal location evidence
 
@@ -81,3 +81,7 @@ There is no approved independent staging database in the current architecture. `
 The first usable release models one semester, a small set of classes, fixed course/timetable configuration, and a private MySQL roster. The existing Project, ScheduleRule, EventSession, ProjectMember, and AttendanceRecord tables remain the internal materialization engine. Students bind through a separate provider identity and select only elective courses; real names and student numbers are imported privately and are never versioned in the public repository or client bundle.
 
 The default attendance workflow is an administrator-started NORMAL session. The server owns eligibility, time-window, duplicate, status override, finalization, and CSV export decisions. PASSCODE, LOCATION, dynamic QR, complex roles, and multi-tenant abstractions remain deferred until this loop is used successfully.
+
+## ADR-020: Temporary Web identities before provider rollout
+
+The first Web MVP adds `H5_WEB` student bindings and `H5_STUDENT`/`ADMIN_PASSWORD` web-session methods to the clean, not-yet-applied baseline. This lets the class test NORMAL attendance without waiting for Casdoor or WeChat credentials. H5 verification still resolves against private MySQL roster data; the later WeChat identity can coexist for the same student without changing attendance records.

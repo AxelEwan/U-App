@@ -22,9 +22,10 @@ import type {
   TimetableResponse,
   UpdateProjectInput,
   UpdateScheduleRuleInput,
+  WebStudentClassOption,
 } from '@qzu/contracts'
 import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
-import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users } from '@qzu/db'
+import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users, webAuthSessions } from '@qzu/db'
 import { and, asc, eq, like, sql } from 'drizzle-orm'
 import { createHash } from 'node:crypto'
 
@@ -219,16 +220,78 @@ export class MySqlBusinessRepository implements BusinessRepository {
       return { status: student ? (electiveRows.length === 0 || selectedIds.length > 0 ? 'READY' : 'NEEDS_ELECTIVES') : 'NEEDS_BINDING', classOptions: classRows.map((item) => ({ id: item.id, semesterId: item.semesterId, classCode: item.classCode, name: item.name })), student: student ? { id: student.id, displayName: student.displayName, classId: student.classId } : null, electiveCourses: electiveRows.map((item) => ({ id: item.id, semesterId: item.semesterId, projectId: item.projectId, courseCode: item.courseCode, name: item.name, kind: item.kind, teacher: item.teacher })), selectedCourseIds: selectedIds }
     } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
   }
+
+  async listWebStudentLoginOptions(): Promise<readonly WebStudentClassOption[]> {
+    try {
+      const semester = (await this.db.select().from(semesterConfigs).where(eq(semesterConfigs.active, true)).orderBy(asc(semesterConfigs.createdAt)).limit(1))[0]
+      if (!semester) return []
+      const classRows = await this.db.select().from(classTable).where(eq(classTable.semesterId, semester.id))
+      return Promise.all(classRows.map(async (classValue) => {
+        const roster = await this.db.select({ displayName: students.displayName }).from(students).where(and(eq(students.classId, classValue.id), eq(students.active, true))).orderBy(asc(students.displayName))
+        return { id: classValue.id, classCode: classValue.classCode, name: classValue.name, studentNames: roster.map((item) => item.displayName) }
+      }))
+    } catch { throw toRepositoryError() }
+  }
+
+  async createWebStudentSession(classId: string, displayName: string, studentNoLast4: string): Promise<{ userId: string; token: string; displayName: string }> {
+    try {
+      const match = (await this.db.select().from(students).where(and(eq(students.classId, classId), eq(students.displayName, displayName), eq(students.active, true), like(students.studentNo, `%${studentNoLast4}`))).limit(1))[0]
+      if (!match) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
+      let userId = ''
+      await this.db.transaction(async (tx) => {
+        const binding = (await tx.select().from(studentBindings).where(eq(studentBindings.studentId, match.id)).limit(1))[0]
+        userId = binding?.userId ?? crypto.randomUUID()
+        await tx.insert(users).values({ id: userId, displayName: match.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: match.displayName } })
+        if (!binding) await tx.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId, provider: 'H5_WEB', providerSubject: `h5:${match.id}` })
+        const required = await tx.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classId), eq(courses.kind, 'REQUIRED')))
+        for (const item of required) if (item.projectId) {
+          const existing = (await tx.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, item.projectId), eq(projectMembers.externalCode, match.studentNo))).limit(1))[0]
+          if (existing) await tx.update(projectMembers).set({ userId, displayName: match.displayName }).where(eq(projectMembers.id, existing.id))
+          else await tx.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: item.projectId, userId, displayName: match.displayName, externalCode: match.studentNo })
+        }
+      })
+      const token = crypto.randomUUID() + crypto.randomUUID()
+      await this.db.insert(webAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), authMethod: 'H5_STUDENT', expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      return { userId, token, displayName: match.displayName }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+
+  async createAdminWebSession(): Promise<{ userId: string; token: string; displayName: string }> {
+    try {
+      const userId = '00000000-0000-4000-8000-0000000000ad'
+      await this.db.insert(users).values({ id: userId, displayName: '管理员', avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: '管理员' } })
+      const token = crypto.randomUUID() + crypto.randomUUID()
+      await this.db.insert(webAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), authMethod: 'ADMIN_PASSWORD', expiresAt: new Date(Date.now() + 12 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      return { userId, token, displayName: '管理员' }
+    } catch { throw toRepositoryError() }
+  }
+
+  async resolveWebSession(token: string): Promise<AuthContext | null> {
+    try {
+      const hash = createHash('sha256').update(token).digest('hex')
+      const row = (await this.db.select({ session: webAuthSessions, user: users }).from(webAuthSessions).innerJoin(users, eq(webAuthSessions.userId, users.id)).where(eq(webAuthSessions.tokenHash, hash)).limit(1))[0]
+      if (!row || row.session.revokedAt || row.session.expiresAt <= new Date()) return null
+      const admin = row.session.authMethod === 'ADMIN_PASSWORD' || Boolean((await this.db.select({ id: projectAdmins.id }).from(projectAdmins).where(eq(projectAdmins.userId, row.user.id)).limit(1))[0])
+      const binding = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, row.user.id)).limit(1))[0]
+      await this.db.update(webAuthSessions).set({ lastSeenAt: new Date() }).where(eq(webAuthSessions.id, row.session.id))
+      return { userId: row.user.id, displayName: row.user.displayName, avatarUrl: row.user.avatarUrl, identityProvider: admin ? 'ADMIN_PASSWORD' : 'H5_WEB', ...(binding?.providerSubject ? { identitySubject: binding.providerSubject } : {}), sessionType: 'WEB', capabilities: { canManageProjects: admin } }
+    } catch { throw toRepositoryError() }
+  }
   async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string, providerSubject: string): Promise<OnboardingResponse> {
     try {
       const match = (await this.db.select().from(students).where(and(eq(students.classId, classId), eq(students.displayName, displayName), like(students.studentNo, `%${studentNoLast4}`))).limit(1))[0]
       if (!match) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
-      const conflict = (await this.db.select().from(studentBindings).where(eq(studentBindings.studentId, match.id)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.providerSubject, providerSubject)).limit(1))[0]
-      if (conflict) throw new RepositoryError('NOT_FOUND', 'Student or identity is already bound')
+      const studentBinding = (await this.db.select().from(studentBindings).where(and(eq(studentBindings.studentId, match.id), eq(studentBindings.provider, 'WECHAT_MINIPROGRAM'))).limit(1))[0]
+      const conflict = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.providerSubject, providerSubject)).limit(1))[0]
+      if (studentBinding || conflict) throw new RepositoryError('NOT_FOUND', 'Student or identity is already bound')
       await this.db.insert(users).values({ id: userId, displayName: match.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: match.displayName } })
       await this.db.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId, provider: 'WECHAT_MINIPROGRAM', providerSubject })
       const required = await this.db.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classId), eq(courses.kind, 'REQUIRED')))
-      for (const item of required) if (item.projectId) await this.db.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: item.projectId, userId, displayName: match.displayName, externalCode: match.studentNo }).onDuplicateKeyUpdate({ set: { displayName: match.displayName, externalCode: match.studentNo } })
+      for (const item of required) if (item.projectId) {
+        const existing = (await this.db.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, item.projectId), eq(projectMembers.externalCode, match.studentNo))).limit(1))[0]
+        if (existing) await this.db.update(projectMembers).set({ userId, displayName: match.displayName }).where(eq(projectMembers.id, existing.id))
+        else await this.db.insert(projectMembers).values({ id: crypto.randomUUID(), projectId: item.projectId, userId, displayName: match.displayName, externalCode: match.studentNo })
+      }
       return this.getOnboarding(userId)
     } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
   }

@@ -15,11 +15,12 @@ function statusClass(status: MockMemberStatus): string {
 }
 
 export default function PublishSessionPage() {
-  const { state, repository } = useMock()
+  const { state, repository, isDevelopment } = useMock()
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null)
   const taskId = Taro.getCurrentInstance().router?.params?.id
   const task = state.publishTasks.find((item) => item.id === taskId) ?? state.publishTasks[0]
-  if (!task) return <PageShell title="Session 详情" subtitle="暂无 Mock 数据。" />
+  if (!isDevelopment) return <PageShell eyebrow="ADMIN WEB" title="请使用管理端" subtitle="生产签到记录位于 qzu-admin.x-lab.top。客户端不会显示 Mock 成员状态。" />
+  if (!task) return <PageShell title="Session 详情" subtitle="暂无开发预览数据。" />
   const selectedMember = task.members.find((member) => member.id === selectedMemberId)
   const apply = (status: MockMemberStatus) => {
     if (selectedMember) repository.updateMemberStatus(task.id, selectedMember.id, status)

@@ -57,7 +57,7 @@ export const webAuthSessions = mysqlTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     tokenHash: char('token_hash', { length: 64 }).notNull(),
-    authMethod: mysqlEnum('auth_method', ['CASDOOR', 'WECHAT_CONFIRMATION', 'DEV']).notNull(),
+    authMethod: mysqlEnum('auth_method', ['CASDOOR', 'WECHAT_CONFIRMATION', 'H5_STUDENT', 'ADMIN_PASSWORD', 'DEV']).notNull(),
     createdAt,
     expiresAt: timestamp('expires_at', { mode: 'date', fsp: 3 }).notNull(),
     revokedAt: timestamp('revoked_at', { mode: 'date', fsp: 3 }),
@@ -432,12 +432,12 @@ export const studentBindings = mysqlTable(
     id: uuid('id').primaryKey(),
     studentId: varchar('student_id', { length: 36 }).notNull().references(() => students.id, { onDelete: 'cascade' }),
     userId: varchar('user_id', { length: 36 }).notNull().references(() => users.id, { onDelete: 'cascade' }),
-    provider: mysqlEnum('provider', ['WECHAT_MINIPROGRAM']).default('WECHAT_MINIPROGRAM').notNull(),
+    provider: mysqlEnum('provider', ['WECHAT_MINIPROGRAM', 'H5_WEB']).default('WECHAT_MINIPROGRAM').notNull(),
     providerSubject: varchar('provider_subject', { length: 255 }).notNull(),
     createdAt,
     updatedAt,
   },
-  (table) => [uniqueIndex('student_bindings_student_uq').on(table.studentId), uniqueIndex('student_bindings_user_uq').on(table.userId), uniqueIndex('student_bindings_subject_uq').on(table.provider, table.providerSubject)],
+  (table) => [uniqueIndex('student_bindings_student_provider_uq').on(table.studentId, table.provider), uniqueIndex('student_bindings_user_uq').on(table.userId), uniqueIndex('student_bindings_subject_uq').on(table.provider, table.providerSubject)],
 )
 
 export const studentCourseEnrollments = mysqlTable(

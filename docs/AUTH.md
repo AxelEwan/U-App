@@ -14,13 +14,13 @@ No real Client ID/Secret is present. The OIDC adapter is an architecture boundar
 
 ## Mini Program
 
-`wx.login()` yields a temporary code sent to the API. A future `WechatAuthProvider` exchanges it server-side via code2Session and maps the OpenID to an internal identity. `WECHAT_APP_SECRET` is API-only. M1 provides provider contracts and a development provider, not real WeChat login.
+`wx.login()` yields a temporary code sent to the API. The API exchanges it server-side via code2Session and maps the OpenID to an internal identity when the server-only credentials are configured. `WECHAT_APP_SECRET` is API-only. Live production credentials and a real mini-program login still require deployment verification.
 
 Mini-program sessions may use high-entropy bearer tokens with expiry/revocation; the database stores only token hashes. Logs never contain the token or OpenID.
 
 ## H5 user login
 
-Ordinary H5 users do not need Casdoor accounts. The designed flow creates a short-lived, browser-bound, one-use challenge. The H5 displays only a random challenge identifier/deep-link payload. A logged-in mini-program user explicitly approves or cancels it. Approval binds that internal user; successful H5 exchange consumes the challenge and creates an HttpOnly web session. Challenges expire, resist replay, never contain OpenID/token/personal data, and cannot authenticate before explicit approval. UI and endpoints are deferred.
+The current Web MVP uses a temporary roster-bound login: the student selects a configured class and roster name, then submits the last four digits of the student number. The API verifies these values against MySQL, reuses or creates the internal student/user binding, and issues only an opaque `qzu_web_session` cookie. The browser never submits a `userId` or `studentId`, and no `X-Dev-User` header is accepted in production. WeChat OpenID can later be linked to the same student without changing attendance records.
 
 ## Web sessions and cookies
 
@@ -28,6 +28,6 @@ Opaque random tokens are hashed before persistence. Cookies are `HttpOnly`, `Pat
 
 ## Development auth
 
-`DEV_AUTH_ENABLED=true` may select the fictional `Dev Student` or `Dev Admin` identities only in development or explicit staging. Environment validation rejects startup if dev auth is enabled with `APP_ENV=production` or `NODE_ENV=production`.
+`DEV_AUTH_ENABLED=true` may select the fictional `Dev Student` or `Dev Admin` identities only in development or explicit staging. Environment validation rejects startup if dev auth is enabled with `APP_ENV=production` or `NODE_ENV=production`. The temporary Admin Web login uses a server-only `ADMIN_LOGIN_SECRET_HASH`; the cleartext password and hash never enter the Admin bundle or `NEXT_PUBLIC_*` variables.
 
 M3 local API integration resolves the non-production-only `X-Dev-User: student|admin` header into an `AuthContext` with capabilities. `requireAdmin` checks `capabilities.canManageProjects`; it does not trust client role flags. This is a test seam, not a replacement for Casdoor or WeChat authentication.
