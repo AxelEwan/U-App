@@ -463,8 +463,7 @@ export const attendanceAuditLogs = mysqlTable(
   {
     id: uuid('id').primaryKey(),
     attendanceRecordId: varchar('attendance_record_id', { length: 36 })
-      .notNull()
-      .references(() => attendanceRecords.id, { onDelete: 'cascade' }),
+      .notNull(),
     operatorUserId: varchar('operator_user_id', { length: 36 })
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
@@ -472,5 +471,12 @@ export const attendanceAuditLogs = mysqlTable(
     newStatus: mysqlEnum('new_status', ['PRESENT', 'LATE', 'LEAVE', 'ABSENT']).notNull(),
     createdAt,
   },
-  (table) => [index('attendance_audit_record_created_idx').on(table.attendanceRecordId, table.createdAt)],
+  (table) => [
+    foreignKey({
+      columns: [table.attendanceRecordId],
+      foreignColumns: [attendanceRecords.id],
+      name: 'aal_attendance_record_fk',
+    }).onDelete('cascade'),
+    index('attendance_audit_record_created_idx').on(table.attendanceRecordId, table.createdAt),
+  ],
 )

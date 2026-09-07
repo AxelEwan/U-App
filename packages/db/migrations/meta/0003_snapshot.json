@@ -62,8 +62,8 @@
         }
       },
       "foreignKeys": {
-        "attendance_audit_logs_attendance_record_id_attendance_records_id_fk": {
-          "name": "attendance_audit_logs_attendance_record_id_attendance_records_id_fk",
+        "aal_attendance_record_fk": {
+          "name": "aal_attendance_record_fk",
           "tableFrom": "attendance_audit_logs",
           "tableTo": "attendance_records",
           "columnsFrom": [
