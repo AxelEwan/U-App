@@ -22,8 +22,9 @@ async function applyCleanMigrations(url: string): Promise<mysql.Pool> {
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
   if (!database || database === 'u_app' || database === 'attendance_dev') throw new Error('MYSQL_INTEGRATION_DATABASE_URL must target a dedicated non-production database')
   const pool = mysql.createPool({ uri: url, connectionLimit: 2, timezone: 'Z' })
-  const [[current]] = await pool.query('SELECT DATABASE() AS database_name') as [{ database_name: string }[], unknown]
-  if (current.database_name !== database) throw new Error('MySQL integration database selection mismatch')
+  const [currentRows] = await pool.query('SELECT DATABASE() AS database_name') as [{ database_name: string }[], unknown]
+  const current = currentRows[0]
+  if (!current || current.database_name !== database) throw new Error('MySQL integration database selection mismatch')
   const [existing] = await pool.query('SHOW TABLES') as [Record<string, unknown>[], unknown]
   if (existing.length) throw new Error('MySQL integration database must be empty before the test')
   for (const file of ['0000_clean_baseline.sql', '0001_exotic_earthquake.sql', '0002_orange_santa_claus.sql', '0003_deep_doctor_faustus.sql']) {
