@@ -62,8 +62,8 @@
         }
       },
       "foreignKeys": {
-        "attendance_field_values_attendance_record_id_attendance_records_id_fk": {
-          "name": "attendance_field_values_attendance_record_id_attendance_records_id_fk",
+        "afv_attendance_record_fk": {
+          "name": "afv_attendance_record_fk",
           "tableFrom": "attendance_field_values",
           "tableTo": "attendance_records",
           "columnsFrom": [

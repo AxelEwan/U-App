@@ -3,6 +3,7 @@ import {
   char,
   date,
   decimal,
+  foreignKey,
   index,
   int,
   json,
@@ -329,8 +330,7 @@ export const attendanceFieldValues = mysqlTable(
   {
     id: uuid('id').primaryKey(),
     attendanceRecordId: varchar('attendance_record_id', { length: 36 })
-      .notNull()
-      .references(() => attendanceRecords.id, { onDelete: 'cascade' }),
+      .notNull(),
     fieldDefinitionId: varchar('field_definition_id', { length: 36 })
       .notNull()
       .references(() => customFieldDefinitions.id, { onDelete: 'restrict' }),
@@ -339,6 +339,11 @@ export const attendanceFieldValues = mysqlTable(
     createdAt,
   },
   (table) => [
+    foreignKey({
+      columns: [table.attendanceRecordId],
+      foreignColumns: [attendanceRecords.id],
+      name: 'afv_attendance_record_fk',
+    }).onDelete('cascade'),
     uniqueIndex('attendance_field_values_record_definition_uq').on(
       table.attendanceRecordId,
       table.fieldDefinitionId,
