@@ -7,7 +7,7 @@ type Project = { id: string; name: string; type: string; status: string; descrip
 type Rule = { id: string; weekdays: number[]; everyNWeeks: number; localStartTime: string; localEndTime: string; effectiveStartDate: string; effectiveEndDate: string; timezone: string }
 type Session = { id: string; projectName: string; scheduledStartAt: string; scheduledEndAt: string; status: string; locationName: string | null }
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3004'
-const adminHeaders = { 'Content-Type': 'application/json', 'X-Dev-User': 'admin' }
+const adminHeaders: HeadersInit = { 'Content-Type': 'application/json', ...(process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH === 'true' ? { 'X-Dev-User': 'admin' } : {}) }
 
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const [id, setId] = useState('')

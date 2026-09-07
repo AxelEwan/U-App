@@ -13,7 +13,7 @@ export default function DashboardPage() {
           <p className="muted">项目、场次和签到的管理入口。</p>
         </div>
         <span className={session ? 'status status-dev' : 'status'}>
-          {session ? `Dev Auth · ${session.displayName}` : '尚未登录'}
+          {session ? `Dev Auth · ${session.displayName}` : '需要生产登录'}
         </span>
       </header>
       <section className="metric-grid" aria-label="平台状态">

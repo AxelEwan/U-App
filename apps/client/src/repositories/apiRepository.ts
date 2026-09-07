@@ -5,23 +5,35 @@ import type { ClientRepository } from './types'
 
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL
   ?? (process.env.TARO_ENV === 'weapp' ? 'http://127.0.0.1:3004' : 'http://localhost:3004')
+const DEV_AUTH_HEADER_ENABLED = process.env.NODE_ENV !== 'production' && process.env.TARO_APP_ENABLE_DEV_AUTH === 'true'
+const WECHAT_AUTH_ENABLED = process.env.TARO_APP_ENABLE_WECHAT_AUTH === 'true' && process.env.TARO_ENV === 'weapp'
 interface ListResponse<T> { readonly items: T[] }
 
 export class ApiRepository implements ClientRepository {
   private devUser: 'student' | 'admin' = 'student'
   private authReady: Promise<void> | null = null
+  private sessionToken: string | null = null
   public constructor(private readonly baseUrl = API_BASE_URL) {}
-  setDevRole(role: 'STUDENT' | 'ADMIN'): void { this.devUser = role === 'ADMIN' ? 'admin' : 'student' }
+  setDevRole(role: 'STUDENT' | 'ADMIN'): void {
+    if (DEV_AUTH_HEADER_ENABLED) this.devUser = role === 'ADMIN' ? 'admin' : 'student'
+  }
 
   private async request<T>(path: string, options: Omit<Taro.request.Option, 'url'> = {}): Promise<T> {
-    if (process.env.TARO_APP_ENABLE_WECHAT_AUTH === 'true' && process.env.TARO_ENV === 'weapp' && !path.startsWith('/api/v1/auth/')) {
-      this.authReady ??= Taro.login().then(({ code }) => Taro.request({ url: `${this.baseUrl}/api/v1/auth/wechat/login`, method: 'POST', data: { code } }).then(() => undefined))
+    if (WECHAT_AUTH_ENABLED && !path.startsWith('/api/v1/auth/')) {
+      this.authReady ??= Taro.login().then(({ code }) => {
+        if (!code) throw new Error('WECHAT_LOGIN_CODE_MISSING')
+        return Taro.request<{ token?: string }>({ url: `${this.baseUrl}/api/v1/auth/wechat/login`, method: 'POST', data: { code } }).then((login) => {
+          this.sessionToken = login.data.token ?? null
+        })
+      })
       await this.authReady
     }
+    const authHeader = this.sessionToken ? { Authorization: `Bearer ${this.sessionToken}` } : {}
+    const devHeader = DEV_AUTH_HEADER_ENABLED ? { 'X-Dev-User': this.devUser } : {}
     const response = await Taro.request<T>({
       ...options,
       url: `${this.baseUrl}${path}`,
-      header: { ...(options.header ?? {}), 'X-Dev-User': this.devUser },
+      header: { ...(options.header ?? {}), ...authHeader, ...devHeader },
     })
     if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`API request failed: ${response.statusCode}`)
     return response.data

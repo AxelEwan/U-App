@@ -2,7 +2,7 @@
 
 本文档描述 U-App 当前的生产部署基础：API 使用宝塔 Node 项目管理，由宝塔托管的 PM2 进程运行；H5 和管理员 Web 使用各自的 Vercel 项目。项目不使用 systemd、Docker 或自定义服务器守护脚本。
 
-本部署基础不自动执行数据库 migration，不接入 Casdoor/微信登录；课程、课表和 NORMAL 签到由 API 业务阶段独立验证。
+本部署基础不自动执行数据库 migration，也不在 H5 端伪造登录身份。微信小程序登录由 API server-side code2Session 提供；Casdoor 管理员登录仍未接入。课程、课表和 NORMAL 签到由 API 业务阶段独立验证。
 
 ## 生产目录与构建产物
 
@@ -238,7 +238,9 @@ workflow 的 SSH 连接强制 `BatchMode=yes`、`StrictHostKeyChecking=yes` 和�
 - `AUTH_SESSION_SECRET`
 - `CORS_ORIGINS`
 - `DEV_AUTH_ENABLED=false`
-- 未来启用时的 `CASDOOR_*` 与 `WECHAT_*` server-only credentials
+- `WECHAT_APP_ID`
+- `WECHAT_APP_SECRET`
+- 未来启用时的 `CASDOOR_*` server-only credentials
 
 ### Vercel ENV
 
@@ -249,11 +251,25 @@ Vercel 前端项目只配置公开 API 地址：
 | Admin | `NEXT_PUBLIC_API_BASE_URL` | `https://api-u.x-lab.top` |
 | H5/PWA | `TARO_APP_API_BASE_URL` | `https://api-u.x-lab.top` |
 
+H5 项目 `u-app` 的 Vercel 设置应为：
+
+| 设置项 | 值 |
+|---|---|
+| Root Directory | repository root (`/`) |
+| Framework Preset | `Other` |
+| Build Command | `pnpm --filter @qzu/client build:h5` |
+| Output Directory | `apps/client/dist` |
+| Production Domain | `u.x-lab.top` |
+
+如果 `/pages/...` 等 H5 history 路由刷新返回 404，只给 H5 项目增加 `/index.html` SPA rewrite；不要把该 rewrite 放到共享仓库根配置，以免影响 Next.js Admin 项目。当前 Vercel project settings 需要在有权访问 `u-app` 的 Vercel team/account 中核对。
+
+Admin 项目 `u-app-admin` 使用 repository root，Next.js Framework Preset，生产变量 `NEXT_PUBLIC_API_BASE_URL=https://api-u.x-lab.top`；其 Build Command 应调用 Admin package 的 `pnpm --filter @qzu/admin build`，Output Directory 保持 Next.js 默认值。生产 Admin 未配置 `NEXT_PUBLIC_ENABLE_DEV_AUTH`，因此不会发送 `X-Dev-User`。
+
 不要在 Vercel 前端项目中配置 `DATABASE_URL`、`AUTH_SESSION_SECRET`、`CASDOOR_CLIENT_SECRET` 或 `WECHAT_APP_SECRET`。
 
 ### 微信 ENV
 
-API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，签发 HttpOnly session cookie。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5/PWA 仍需后续登录方案，不会使用 Dev Auth 冒充生产身份。
+API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，同时签发 HttpOnly session cookie 和小程序 bearer session。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5/PWA 仍需后续登录方案，不会使用 Dev Auth 冒充生产身份。
 
 ### Casdoor ENV
 
@@ -289,4 +305,15 @@ APP_ENV=development DATABASE_URL='mysql://user:password@127.0.0.1:13306/u_app' \
 pnpm db:import-roster --file private-data/class.roster.csv --semester 2026-fall
 ```
 
-生产导入还需要 `NODE_ENV=production` 与一次性人工确认变量 `ROSTER_IMPORT_CONFIRM=u_app-production`。命令只输出导入数量，不输出姓名、学号或 provider subject。生产发布 workflow 不会导入 roster，也不会执行 migration。
+生产导入还需要 `NODE_ENV=production` 与一次性人工确认变量 `ROSTER_IMPORT_CONFIRM=u_app-production`。命令只输出 `imported/skipped/conflicts` 数量，不输出姓名、学号或 provider subject。生产发布 workflow 不会导入 roster，也不会执行 migration。
+
+## MySQL 集成验证
+
+仓库提供只针对专用空测试库的集成测试，不接受 `u_app` 或 `attendance_dev`：
+
+```bash
+MYSQL_INTEGRATION_DATABASE_URL='mysql://user:password@127.0.0.1:3306/u_app_integration' \
+pnpm test:mysql
+```
+
+测试会先确认 `SELECT DATABASE()`、空表状态，再从 `0000_clean_baseline.sql` 到 `0003_deep_doctor_faustus.sql` 顺序执行，覆盖固定学期、roster、微信绑定、选修课、个人课表、NORMAL 签到、重复签到、迟到、finalize、管理员覆盖、审计和 CSV。没有提供专用 URL 时该测试明确 skip；它不会连接或清理生产 `u_app`。

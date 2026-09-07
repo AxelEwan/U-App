@@ -25,6 +25,13 @@ describe('API application', () => {
     expect((await response.json() as { identityProvider: string }).identityProvider).toBe('WECHAT_MINIPROGRAM')
   })
 
+  it('accepts a mini-program bearer session when development auth is disabled', async () => {
+    const app = createApp({ corsOrigins: [], devAuthEnabled: false, resolveMiniProgramSession: (token) => Promise.resolve(token === 'opaque' ? { userId: '00000000-0000-4000-8000-000000000099', displayName: 'Bound Student', identityProvider: 'WECHAT_MINIPROGRAM', sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: false } } : null) })
+    const response = await app.request('/api/v1/me', { headers: { Authorization: 'Bearer opaque' } })
+    expect(response.status).toBe(200)
+    expect((await response.json() as { userId: string }).userId).toBe('00000000-0000-4000-8000-000000000099')
+  })
+
   it('returns projects and today data from the business repository', async () => {
     const app = createApp({ corsOrigins: [], devAuthEnabled: true })
     const projectsResponse = await app.request('/api/v1/projects')

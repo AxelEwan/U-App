@@ -73,7 +73,9 @@ async function resolveAuth(request: Request, enabled: boolean, resolveMiniProgra
     const user = key ? DEV_USERS[key] : undefined
     if (user) return { userId: user.userId, displayName: user.displayName, identityProvider: 'DEV', sessionType: 'DEV', capabilities: { canManageProjects: user.canManageProjects } }
   }
-  const token = /(?:^|;)\s*qzu_mini_session=([^;]+)/.exec(request.headers.get('Cookie') ?? '')?.[1]
+  const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get('Authorization') ?? '')?.[1]
+  const cookie = /(?:^|;)\s*qzu_mini_session=([^;]+)/.exec(request.headers.get('Cookie') ?? '')?.[1]
+  const token = bearer ?? cookie
   return token && resolveMiniProgramSession ? resolveMiniProgramSession(token) : null
 }
 
@@ -98,7 +100,7 @@ export function createApp(config: ApiRuntimeConfig) {
     const providerSubject = await config.exchangeWechatCode(input.data.code)
     const session = await config.createMiniProgramSession(providerSubject)
     context.header('Set-Cookie', `qzu_mini_session=${session.token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`)
-    return context.json({ userId: session.userId, displayName: session.displayName })
+    return context.json({ userId: session.userId, displayName: session.displayName, token: session.token })
   })
   app.get('/api/v1/me', async (context) => {
     const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession)

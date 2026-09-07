@@ -9,7 +9,7 @@ type Record = { id: string; projectMemberId: string; userId: string | null; stat
 type LiveMember = { projectMemberId: string; displayName: string; externalCode: string | null; status: Record['status'] | 'PENDING'; checkedInAt: string | null }
 type Live = { session: Session; total: number; present: number; late: number; leave: number; absent: number; pending: number; records: Record[]; members: LiveMember[] }
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:3004'
-const adminHeaders = { 'Content-Type': 'application/json', 'X-Dev-User': 'admin' }
+const adminHeaders: HeadersInit = { 'Content-Type': 'application/json', ...(process.env.NODE_ENV !== 'production' && process.env.NEXT_PUBLIC_ENABLE_DEV_AUTH === 'true' ? { 'X-Dev-User': 'admin' } : {}) }
 
 export default function AttendancePage() {
   const [projects, setProjects] = useState<Project[]>([])

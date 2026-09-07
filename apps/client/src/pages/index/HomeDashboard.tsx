@@ -83,7 +83,7 @@ export default function HomeDashboard() {
   }, [apiRepository])
   useEffect(() => { void apiRepository.getOnboarding().then((value) => { if (value.classOptions.length && value.status !== 'READY') setOnboarding(value) }).catch(() => undefined) }, [apiRepository])
   if (onboarding) return <StudentOnboarding value={onboarding} onChange={setOnboarding} />
-  if (error) return <View className="empty-state"><Text className="empty-title">暂时无法读取今日安排</Text><Text className="empty-copy">请确认本地 API 已启动。</Text></View>
+  if (error) return <View className="empty-state"><Text className="empty-title">暂时无法读取今日安排</Text><Text className="empty-copy">请先在微信小程序完成登录；H5 预览不会伪造生产身份。</Text></View>
   if (!today) return <View className="card"><Text className="card-meta">正在读取今日安排…</Text></View>
   const list = today.todaySessions
   return <>

@@ -41,6 +41,8 @@ try {
   const tableNames = tables.map((row) => Object.values(row)[0])
   for (const name of ['semester_configs', 'classes', 'students', 'courses', 'class_timetable', 'project_members']) if (!tableNames.includes(name)) throw new Error(`Missing required table: ${name}`)
   let imported = 0
+  let skipped = 0
+  let conflicts = 0
   await pool.query('START TRANSACTION')
   try {
     const [semesters] = await pool.query('SELECT id FROM semester_configs WHERE code = ? LIMIT 1', [semesterCode])
@@ -48,12 +50,15 @@ try {
     for (const row of rows) {
       const [classes] = await pool.query('SELECT id FROM classes WHERE semester_id = ? AND class_code = ? LIMIT 1', [semesters[0].id, row.class_code])
       if (!classes[0]) throw new Error('Roster references an unknown class')
-      await pool.query('INSERT INTO students (id, student_no, display_name, class_id, active) VALUES (UUID(), ?, ?, ?, 1) ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), class_id = VALUES(class_id), active = 1', [row.student_no, row.display_name, classes[0].id])
+      const [existingStudents] = await pool.query('SELECT display_name, class_id FROM students WHERE student_no = ? LIMIT 1', [row.student_no])
+      if (existingStudents[0] && existingStudents[0].class_id === classes[0].id && existingStudents[0].display_name === row.display_name) { skipped += 1; continue }
+      if (existingStudents[0]) { conflicts += 1; continue }
+      await pool.query('INSERT INTO students (id, student_no, display_name, class_id, active) VALUES (UUID(), ?, ?, ?, 1)', [row.student_no, row.display_name, classes[0].id])
       const [projects] = await pool.query('SELECT DISTINCT courses.project_id FROM class_timetable JOIN courses ON courses.id = class_timetable.course_id WHERE class_timetable.class_id = ? AND courses.kind = \'REQUIRED\' AND courses.project_id IS NOT NULL', [classes[0].id])
       for (const project of projects) { const [members] = await pool.query('SELECT id FROM project_members WHERE project_id = ? AND external_code = ? LIMIT 1', [project.project_id, row.student_no]); if (!members[0]) await pool.query('INSERT INTO project_members (id, project_id, user_id, display_name, external_code) VALUES (UUID(), ?, NULL, ?, ?)', [project.project_id, row.display_name, row.student_no]) }
       imported += 1
     }
     await pool.query('COMMIT')
   } catch (error) { await pool.query('ROLLBACK'); throw error }
-  console.log(JSON.stringify({ event: 'roster_import_complete', semesterCode, imported }))
+  console.log(JSON.stringify({ event: 'roster_import_complete', semesterCode, imported, skipped, conflicts }))
 } finally { await pool.end() }

@@ -40,6 +40,7 @@ export class RepositoryError extends Error {
     this.name = 'RepositoryError'
   }
 }
+export interface RosterImportResult { readonly imported: number; readonly skipped: number; readonly conflicts: number }
 
 export interface BusinessRepository {
   listProjects(): Promise<readonly ProjectSummary[]>
@@ -69,7 +70,7 @@ export interface BusinessRepository {
   updateAttendance(sessionId: string, input: AttendanceAdminActionInput, actor: AuthContext, now?: Date): Promise<AttendanceRecord>
   finalizeAttendance(sessionId: string, actor: AuthContext, now?: Date): Promise<AttendanceLiveResponse>
   exportAttendanceCsv(sessionId: string): Promise<string>
-  importRoster(semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<{ imported: number }>
+  importRoster(semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<RosterImportResult>
   createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }>
   resolveMiniProgramSession(token: string): Promise<AuthContext | null>
 }
@@ -290,6 +291,7 @@ export class MemoryBusinessRepository implements BusinessRepository {
     void actor
     const fixed = this.fixedSessions.get(sessionId)
     if (!fixed) { const value = await this.getSession(sessionId, now); if (!value) throw new RepositoryError('NOT_FOUND', 'Session not found'); return { ...value, checkInOpenAt: now.toISOString(), checkInCloseAt: plusMinutes(now, durationMinutes).toISOString() } }
+    if (fixed.started) return fixed.summary
     fixed.started = true
     fixed.summary = { ...fixed.summary, checkInOpenAt: now.toISOString(), checkInCloseAt: plusMinutes(now, durationMinutes).toISOString(), status: deriveSessionStatus({ now, startAt: new Date(fixed.summary.scheduledStartAt), endAt: new Date(fixed.summary.scheduledEndAt), checkInOpenAt: now, checkInCloseAt: plusMinutes(now, durationMinutes) }) }
     return fixed.summary
@@ -315,6 +317,7 @@ export class MemoryBusinessRepository implements BusinessRepository {
     const key = `${sessionId}:${member.id}`
     const existing = this.attendance.get(key)
     if (input.status === 'VOID' && !existing) throw new RepositoryError('NOT_FOUND', 'Attendance record not found')
+    if (input.status === 'VOID' && existing?.voidedAt) return existing
     const record: AttendanceRecord = input.status === 'VOID' ? { ...existing!, voidedAt: now.toISOString(), voidedByUserId: actor.userId, updatedAt: now.toISOString() } : { ...(existing ?? { id: crypto.randomUUID(), sessionId, projectMemberId: member.id, userId: member.userId, checkedInAt: null, method: 'MANUAL' as const, createdByUserId: actor.userId, createdAt: now.toISOString(), voidedAt: null, voidedByUserId: null, distanceMeters: null, accuracyMeters: null, locationPassed: null }), status: input.status, source: 'ADMIN', updatedAt: now.toISOString(), voidedAt: null, voidedByUserId: null }
     this.attendance.set(key, record)
     return record
@@ -342,20 +345,22 @@ export class MemoryBusinessRepository implements BusinessRepository {
     return `\uFEFF${rows.join('\n')}\n`
   }
 
-  importRoster(_semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<{ imported: number }> {
+  importRoster(_semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<RosterImportResult> {
     void actor
     if (!this.semester) throw new RepositoryError('NOT_FOUND', 'Semester configuration is required')
-    let imported = 0
+    let imported = 0; let skipped = 0; let conflicts = 0
     for (const entry of entries) {
       const classValue = this.semester.classes.find((item) => item.classCode === entry.classCode)
       if (!classValue) throw new RepositoryError('NOT_FOUND', 'Roster references an unknown class')
       const current = [...this.fixedStudents.values()].find((item) => item.studentNo === entry.studentNo)
-      const student = current ?? { id: crypto.randomUUID(), studentNo: entry.studentNo, displayName: entry.displayName, classId: classValue.id, active: true }
+      if (current && current.classId === classValue.id && current.displayName === entry.displayName) { skipped += 1; continue }
+      if (current) { conflicts += 1; continue }
+      const student = { id: crypto.randomUUID(), studentNo: entry.studentNo, displayName: entry.displayName, classId: classValue.id, active: true }
       student.displayName = entry.displayName; student.classId = classValue.id; student.active = true
       this.fixedStudents.set(student.id, student)
       this.refreshStudentMembership(student)
       imported += 1
     }
-    return Promise.resolve({ imported })
+    return Promise.resolve({ imported, skipped, conflicts })
   }
 }
