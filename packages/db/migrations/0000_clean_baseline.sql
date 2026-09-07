@@ -202,7 +202,7 @@ CREATE TABLE `web_login_challenges` (
 );
 --> statement-breakpoint
 ALTER TABLE `attendance_field_values` ADD CONSTRAINT `afv_attendance_record_fk` FOREIGN KEY (`attendance_record_id`) REFERENCES `attendance_records`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `attendance_field_values` ADD CONSTRAINT `attendance_field_values_field_definition_id_custom_field_definitions_id_fk` FOREIGN KEY (`field_definition_id`) REFERENCES `custom_field_definitions`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `attendance_field_values` ADD CONSTRAINT `afv_field_definition_fk` FOREIGN KEY (`field_definition_id`) REFERENCES `custom_field_definitions`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `attendance_policies` ADD CONSTRAINT `attendance_policies_project_id_projects_id_fk` FOREIGN KEY (`project_id`) REFERENCES `projects`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_session_id_event_sessions_id_fk` FOREIGN KEY (`session_id`) REFERENCES `event_sessions`(`id`) ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `attendance_records` ADD CONSTRAINT `attendance_records_project_member_id_project_members_id_fk` FOREIGN KEY (`project_member_id`) REFERENCES `project_members`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

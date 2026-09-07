@@ -75,8 +75,8 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "attendance_field_values_field_definition_id_custom_field_definitions_id_fk": {
-          "name": "attendance_field_values_field_definition_id_custom_field_definitions_id_fk",
+        "afv_field_definition_fk": {
+          "name": "afv_field_definition_fk",
           "tableFrom": "attendance_field_values",
           "tableTo": "custom_field_definitions",
           "columnsFrom": [

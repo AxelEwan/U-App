@@ -332,8 +332,7 @@ export const attendanceFieldValues = mysqlTable(
     attendanceRecordId: varchar('attendance_record_id', { length: 36 })
       .notNull(),
     fieldDefinitionId: varchar('field_definition_id', { length: 36 })
-      .notNull()
-      .references(() => customFieldDefinitions.id, { onDelete: 'restrict' }),
+      .notNull(),
     textValue: text('text_value'),
     selectedValues: json('selected_values').$type<string[]>(),
     createdAt,
@@ -344,6 +343,11 @@ export const attendanceFieldValues = mysqlTable(
       foreignColumns: [attendanceRecords.id],
       name: 'afv_attendance_record_fk',
     }).onDelete('cascade'),
+    foreignKey({
+      columns: [table.fieldDefinitionId],
+      foreignColumns: [customFieldDefinitions.id],
+      name: 'afv_field_definition_fk',
+    }).onDelete('restrict'),
     uniqueIndex('attendance_field_values_record_definition_uq').on(
       table.attendanceRecordId,
       table.fieldDefinitionId,
