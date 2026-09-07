@@ -16,9 +16,9 @@ Hono is the sole business source of truth. Next Server Actions and Taro pages do
 
 Internal UUIDs are stable business keys. WeChat OpenID, Casdoor subject, email, and username remain replaceable provider attributes.
 
-## ADR-005: Casdoor for Admin only
+## ADR-005: Casdoor for Admin and optional account linking
 
-Casdoor remains the future Admin identity provider. Until it is configured, Admin Web uses a server-only scrypt password hash and an opaque web session; ordinary H5 uses a roster-bound class/name/last-four verification. Neither path trusts `X-Dev-User` in production.
+Casdoor is the recommended Admin Web login and may be linked to an already authenticated WeChat User. The API uses server-side OIDC Authorization Code + PKCE, issuer/JWKS/claim validation, and opaque web sessions. The server-only scrypt password login remains a temporary fallback. Neither path trusts `X-Dev-User` in production.
 
 ## ADR-006: Privacy-minimal location evidence
 
@@ -82,6 +82,6 @@ The first usable release models one semester, a small set of classes, fixed cour
 
 The default attendance workflow is an administrator-started NORMAL session. The server owns eligibility, time-window, duplicate, status override, finalization, and CSV export decisions. PASSCODE, LOCATION, dynamic QR, complex roles, and multi-tenant abstractions remain deferred until this loop is used successfully.
 
-## ADR-020: Temporary Web identities before provider rollout
+## ADR-020: Unified provider identities and Web challenge login
 
-The first Web MVP adds `H5_WEB` student bindings and `H5_STUDENT`/`ADMIN_PASSWORD` web-session methods to the clean, not-yet-applied baseline. This lets the class test NORMAL attendance without waiting for Casdoor or WeChat credentials. H5 verification still resolves against private MySQL roster data; the later WeChat identity can coexist for the same student without changing attendance records.
+`user_identities` is the only provider-subject table. `student_bindings` is exclusively the one-to-one Student↔User business binding, so a User can have both WeChat and Casdoor identities without duplicating attendance ownership. Production H5 authentication uses a short-lived, browser-bound `web_login_challenges` flow approved by an authenticated mini program and consumed once. `H5_STUDENT` remains a non-provider web session for local/integration fallback only.

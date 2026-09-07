@@ -38,6 +38,32 @@ describe('API application', () => {
     expect((await me.json() as { identityProvider: string }).identityProvider).toBe('H5_WEB')
   })
 
+  it('keeps provider identities on one user and completes the WeChat web challenge flow', async () => {
+    const repository = new (await import('./repository')).MemoryBusinessRepository()
+    const first = await repository.createProviderSession('WECHAT_MINIPROGRAM', 'fictional-openid')
+    const repeated = await repository.createProviderSession('WECHAT_MINIPROGRAM', 'fictional-openid')
+    expect(repeated.userId).toBe(first.userId)
+    const miniCookie = `qzu_mini_session=${first.token}`
+    const app = createApp({ repository, corsOrigins: ['https://u.x-lab.top'], devAuthEnabled: false, resolveMiniProgramSession: (token) => repository.resolveMiniProgramSession(token), resolveWebSession: (token) => repository.resolveWebSession(token) })
+    const created = await app.request('/api/v1/auth/web/challenges', { method: 'POST' })
+    expect(created.status).toBe(200)
+    const challenge = await created.json() as { challengeId: string; challengeToken: string }
+    const browserCookie = created.headers.get('Set-Cookie')!.split(';')[0]!
+    expect((await app.request(`/api/v1/auth/web/challenges/${challenge.challengeId}/approve`, { method: 'POST', headers: { Cookie: miniCookie } })).status).toBe(404)
+    const approved = await app.request(`/api/v1/auth/web/challenges/${challenge.challengeId}/approve`, { method: 'POST', headers: { Cookie: miniCookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ challengeToken: challenge.challengeToken }) })
+    expect(approved.status).toBe(200)
+    const status = await app.request(`/api/v1/auth/web/challenges/${challenge.challengeId}`, { headers: { Cookie: browserCookie } })
+    expect((await status.json() as { status: string }).status).toBe('APPROVED')
+    const consumed = await app.request(`/api/v1/auth/web/challenges/${challenge.challengeId}/consume`, { method: 'POST', headers: { Cookie: browserCookie } })
+    expect(consumed.status).toBe(200)
+    const webCookie = consumed.headers.get('Set-Cookie')!.split(';')[0]!
+    const me = await app.request('/api/v1/me', { headers: { Cookie: webCookie } })
+    const meBody = await me.json() as { userId: string; identityProvider: string }
+    expect(meBody.userId).toBe(first.userId)
+    expect(meBody.identityProvider).toBe('WECHAT_MINIPROGRAM')
+    expect((await app.request(`/api/v1/auth/web/challenges/${challenge.challengeId}/consume`, { method: 'POST', headers: { Cookie: browserCookie } })).status).toBe(404)
+  })
+
   it('returns a validated health response and request ID', async () => {
     const app = createApp({ corsOrigins: ['http://localhost:3000'] })
     const response = await app.request('/health')

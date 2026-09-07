@@ -64,7 +64,15 @@ Returns `{ serverTime, activeCheckin, nextSession, todaySessions }`. The API ret
 
 ### `POST /api/v1/auth/wechat/login`
 
-Exchanges a WeChat mini-program login code server-side and sets an HttpOnly session cookie. It is enabled only when the API has server-only WeChat credentials; Dev Auth is never used in production.
+Exchanges a WeChat mini-program login code server-side, resolves or creates the matching `user_identities` row, and sets an HttpOnly session cookie. It is enabled only when the API has server-only WeChat credentials; Dev Auth is never used in production. `POST /api/v1/auth/wechat/link` adds a WeChat identity to the currently authenticated User and rejects conflicts.
+
+### `GET /api/v1/auth/casdoor/start`, `GET /api/v1/auth/casdoor/callback`
+
+Starts and completes server-side Casdoor OIDC using issuer discovery, PKCE, state, nonce, signature, issuer, audience, and expiry validation. `?link=1` links the Casdoor subject to the current User; otherwise it creates or resolves a User and sets an opaque `qzu_web_session` cookie. The Client Secret never leaves the API process.
+
+### Web login challenge endpoints
+
+`POST /api/v1/auth/web/challenges` creates a two-minute browser-bound challenge. An authenticated mini program approves it through either `POST /api/v1/auth/web/challenges/:id/approve` with the long challenge token or `POST /api/v1/auth/web/challenges/code/:code/approve` with the short code. The browser polls `GET /api/v1/auth/web/challenges/:id`, then calls `POST /api/v1/auth/web/challenges/:id/consume` once after approval. Only hashes are stored and replay is rejected.
 
 ### `GET /api/v1/auth/web/student/options`, `POST /api/v1/auth/web/student/login`
 
@@ -84,7 +92,7 @@ Admin-only. Imports `{ semesterCode, entries: [{ classCode, studentNo, displayNa
 
 ### `GET /api/v1/me/onboarding`, `POST /api/v1/me/onboarding/verify`, `POST /api/v1/me/onboarding/electives`
 
-Returns binding state and elective choices without exposing full student numbers. Verification requires class, display name, and the last four digits of the student number; the provider subject comes from `AuthContext`.
+Returns binding state and elective choices without exposing full student numbers. Verification requires class, display name, and the last four digits of the student number; the authenticated User comes from `AuthContext`. Provider subjects are stored only in `user_identities`, never in `student_bindings`.
 
 ### `POST /api/v1/sessions/:id/attendance/start`
 

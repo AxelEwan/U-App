@@ -21,7 +21,7 @@ export default function ProjectsPage() {
       <Text className="subtitle">{isDevelopment ? '开发预览项目。' : '从 API 加载真实项目。'}</Text>
       {visibleProjects.map((project) => (
         <View className="card" key={project.id} onClick={() => void Taro.navigateTo({ url: `/pages/project-detail/index?id=${project.id}` })}>
-          <Text className="card-title">{project.name}</Text><Text className="card-meta">{isDevelopment ? project.meta : `${project.type} · ${project.status}`}</Text>
+          <Text className="card-title">{project.name}</Text><Text className="card-meta">{isDevelopment ? ('meta' in project ? project.meta : '') : ('type' in project ? `${project.type} · ${project.status}` : '')}</Text>
         </View>
       ))}{!visibleProjects.length ? <View className="empty-state"><Text className="empty-title">暂无真实项目</Text><Text className="empty-copy">管理员发布课程后会显示在这里。</Text></View> : null}
     </View>

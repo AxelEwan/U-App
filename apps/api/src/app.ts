@@ -21,6 +21,9 @@ import {
   webStudentLoginInputSchema,
   webStudentLoginOptionsResponseSchema,
   adminLoginInputSchema,
+  createWebLoginChallengeOutputSchema,
+  webLoginChallengeApproveSchema,
+  webLoginChallengeStatusResponseSchema,
   healthResponseSchema,
   meResponseSchema,
   projectsResponseSchema,
@@ -41,6 +44,7 @@ import { cors } from 'hono/cors'
 import { scryptSync, timingSafeEqual } from 'node:crypto'
 
 import { MemoryBusinessRepository, RepositoryError, type BusinessRepository } from './repository'
+import type { CasdoorCallbackResult } from './casdoor'
 
 export interface ApiRuntimeConfig {
   readonly corsOrigins: readonly string[]
@@ -53,6 +57,12 @@ export interface ApiRuntimeConfig {
   readonly createWebStudentSession?: (classId: string, displayName: string, studentNoLast4: string) => Promise<{ userId: string; token: string; displayName: string }>
   readonly createAdminWebSession?: () => Promise<{ userId: string; token: string; displayName: string }>
   readonly adminLoginSecretHash?: string
+  readonly createProviderSession?: (provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string, displayName?: string) => Promise<{ userId: string; token: string; displayName: string }>
+  readonly linkProviderIdentity?: (userId: string, provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string) => Promise<void>
+  readonly casdoorAuthorizationUrl?: (returnUrl: string, targetUserId?: string) => Promise<string>
+  readonly handleCasdoorCallback?: (url: string) => Promise<CasdoorCallbackResult>
+  readonly publicH5Url?: string
+  readonly publicAdminUrl?: string
 }
 type ApiVariables = { requestId: string }
 type ApiEnv = { Variables: ApiVariables }
@@ -62,6 +72,7 @@ function errorStatus(code: ApiErrorCode): 400 | 401 | 403 | 404 | 409 | 429 | 50
   if (code === 'FORBIDDEN' || code === 'ADMIN_REQUIRED') return 403
   if (code.endsWith('_NOT_FOUND') || code === 'NOT_FOUND') return 404
   if (code === 'ALREADY_CHECKED_IN' || code === 'DATABASE_UNAVAILABLE') return code === 'DATABASE_UNAVAILABLE' ? 500 : 409
+  if (code === 'ACCOUNT_BINDING_CONFLICT') return 409
   if (code === 'RATE_LIMITED') return 429
   if (code === 'INTERNAL_ERROR') return 500
   return 400
@@ -99,6 +110,14 @@ function setWebSessionCookie(context: Context<ApiEnv>, token: string): void {
   context.header('Set-Cookie', `qzu_web_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`)
 }
 
+function setBindingCookie(context: Context<ApiEnv>, token: string): void {
+  context.header('Set-Cookie', `qzu_web_binding=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=180`)
+}
+
+function readCookie(request: Request, name: string): string | null {
+  return new RegExp(`(?:^|;)\\s*${name}=([^;]+)`).exec(request.headers.get('Cookie') ?? '')?.[1] ?? null
+}
+
 function verifyAdminPassword(password: string, encoded: string): boolean {
   const parts = encoded.split('$')
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false
@@ -116,6 +135,15 @@ export function createApp(config: ApiRuntimeConfig) {
   const allowedOrigins = new Set(config.corsOrigins)
   const repository = config.repository ?? new MemoryBusinessRepository()
   const app = new Hono<ApiEnv>()
+  const rateBuckets = new Map<string, { count: number; resetAt: number }>()
+  const allowRate = (key: string, limit: number, windowMs: number): boolean => {
+    const now = Date.now()
+    const current = rateBuckets.get(key)
+    if (!current || current.resetAt <= now) { rateBuckets.set(key, { count: 1, resetAt: now + windowMs }); return true }
+    if (current.count >= limit) return false
+    current.count += 1
+    return true
+  }
   app.use('*', async (context, next) => { const requestId = context.req.header('X-Request-Id')?.slice(0, 128) || crypto.randomUUID(); context.set('requestId', requestId); context.header('X-Request-Id', requestId); await next() })
   app.use('*', cors({ origin: (origin) => allowedOrigins.has(origin) ? origin : undefined, allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'], allowHeaders: ['Content-Type', 'X-Request-Id', 'Authorization', ...(config.devAuthEnabled ? ['X-Dev-User'] : [])], credentials: true, maxAge: 600 }))
   app.use('*', async (context, next) => { const startedAt = performance.now(); await next(); console.log(JSON.stringify({ level: 'info', event: 'http_request', requestId: context.get('requestId'), method: context.req.method, path: context.req.path, status: context.res.status, durationMs: Math.round((performance.now() - startedAt) * 100) / 100 })) })
@@ -129,6 +157,67 @@ export function createApp(config: ApiRuntimeConfig) {
     const session = await config.createMiniProgramSession(providerSubject)
     context.header('Set-Cookie', `qzu_mini_session=${session.token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${30 * 24 * 60 * 60}`)
     return context.json({ userId: session.userId, displayName: session.displayName, token: session.token })
+  })
+  app.post('/api/v1/auth/wechat/link', async (context) => {
+    if (!config.exchangeWechatCode || !config.linkProviderIdentity) throw new ApiError('AUTHENTICATION_REQUIRED', 'WeChat linking is not configured')
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
+    if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
+    const input = wechatLoginInputSchema.safeParse(await context.req.json())
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid WeChat login input', input.error.flatten())
+    await config.linkProviderIdentity(auth.userId, 'WECHAT_MINIPROGRAM', await config.exchangeWechatCode(input.data.code))
+    return context.json({ linked: true })
+  })
+  app.get('/api/v1/auth/casdoor/start', async (context) => {
+    if (!config.casdoorAuthorizationUrl) throw new ApiError('AUTHENTICATION_REQUIRED', 'Casdoor is not configured')
+    const link = context.req.query('link') === '1'
+    const auth = link ? await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession) : null
+    if (link && !auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
+    const returnUrl = context.req.query('mode') === 'admin' ? config.publicAdminUrl ?? config.publicH5Url ?? '/' : config.publicH5Url ?? '/'
+    return context.redirect(await config.casdoorAuthorizationUrl(returnUrl, auth?.userId))
+  })
+  app.get('/api/v1/auth/casdoor/callback', async (context) => {
+    if (!config.handleCasdoorCallback) throw new ApiError('AUTHENTICATION_REQUIRED', 'Casdoor is not configured')
+    const result = await config.handleCasdoorCallback(context.req.url)
+    if (result.targetUserId) {
+      if (!config.linkProviderIdentity) throw new ApiError('AUTHENTICATION_REQUIRED', 'Identity linking is not configured')
+      await config.linkProviderIdentity(result.targetUserId, 'CASDOOR', result.providerSubject)
+      return context.redirect(result.returnUrl)
+    }
+    if (!config.createProviderSession) throw new ApiError('AUTHENTICATION_REQUIRED', 'Casdoor session is not configured')
+    const session = await config.createProviderSession('CASDOOR', result.providerSubject, result.displayName)
+    setWebSessionCookie(context, session.token)
+    return context.redirect(result.returnUrl)
+  })
+  app.post('/api/v1/auth/web/challenges', async (context) => {
+    const binding = readCookie(context.req.raw, 'qzu_web_binding') ?? `${crypto.randomUUID()}${crypto.randomUUID()}`
+    const challenge = await repository.createWebLoginChallenge(binding)
+    if (!readCookie(context.req.raw, 'qzu_web_binding')) setBindingCookie(context, binding)
+    return context.json(createWebLoginChallengeOutputSchema.parse({ challengeId: challenge.id, challengeToken: challenge.challengeToken, shortCode: challenge.shortCode, expiresAt: challenge.expiresAt, status: challenge.status }))
+  })
+  app.get('/api/v1/auth/web/challenges/:id', async (context) => {
+    const binding = readCookie(context.req.raw, 'qzu_web_binding')
+    const status = binding ? await repository.getWebLoginChallenge(context.req.param('id'), binding) : null
+    if (!status) throw new ApiError('NOT_FOUND', 'Challenge not found')
+    return context.json(webLoginChallengeStatusResponseSchema.parse({ challengeId: status.id, status: status.status, expiresAt: status.expiresAt, approvedAt: status.approvedAt }))
+  })
+  const approveChallenge = async (context: Context<ApiEnv>, identifier: { id?: string; shortCode?: string }) => {
+    const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
+    if (!auth || auth.identityProvider !== 'WECHAT_MINIPROGRAM') throw new ApiError('FORBIDDEN', 'An authenticated WeChat session is required')
+    if (!allowRate(`challenge:${context.req.header('x-forwarded-for') ?? auth.userId}`, 10, 60_000)) throw new ApiError('RATE_LIMITED', 'Too many attempts')
+    const input = webLoginChallengeApproveSchema.safeParse(await context.req.json().catch(() => ({})))
+    if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid challenge approval', input.error.flatten())
+    if (identifier.id && !input.data.challengeToken) throw new ApiError('NOT_FOUND', 'Challenge not found')
+    const status = await repository.approveWebLoginChallenge({ ...identifier, ...(input.data.challengeToken ? { challengeToken: input.data.challengeToken } : {}), userId: auth.userId })
+    return context.json(webLoginChallengeStatusResponseSchema.parse({ challengeId: status.id, status: status.status, expiresAt: status.expiresAt, approvedAt: status.approvedAt }))
+  }
+  app.post('/api/v1/auth/web/challenges/:id/approve', async (context) => approveChallenge(context, { id: context.req.param('id') }))
+  app.post('/api/v1/auth/web/challenges/code/:code/approve', async (context) => approveChallenge(context, { shortCode: context.req.param('code') }))
+  app.post('/api/v1/auth/web/challenges/:id/consume', async (context) => {
+    const binding = readCookie(context.req.raw, 'qzu_web_binding')
+    if (!binding) throw new ApiError('UNAUTHORIZED', 'Browser binding is required')
+    const session = await repository.consumeWebLoginChallenge(context.req.param('id'), binding)
+    setWebSessionCookie(context, session.token)
+    return context.json({ userId: session.userId, displayName: session.displayName })
   })
   app.get('/api/v1/auth/web/student/options', async (context) => {
     if (!config.repository) return context.json({ classes: [] })
@@ -154,7 +243,7 @@ export function createApp(config: ApiRuntimeConfig) {
   app.get('/api/v1/me', async (context) => {
     const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
-    return context.json(meResponseSchema.parse({ ...auth, userId: auth.userId, displayName: auth.displayName ?? '用户' }))
+    return context.json(meResponseSchema.parse({ ...auth, userId: auth.userId, displayName: auth.displayName ?? '用户', identityProviders: await repository.listIdentityProviders(auth.userId) }))
   })
   app.get('/api/v1/projects', async (context) => context.json(projectsResponseSchema.parse({ items: await repository.listProjects() })))
   app.post('/api/v1/projects', async (context) => {
@@ -303,7 +392,8 @@ export function createApp(config: ApiRuntimeConfig) {
     if (!auth) throw new ApiError('UNAUTHORIZED', 'Authentication is required')
     const input = verifyStudentInputSchema.safeParse(await context.req.json())
     if (!input.success) throw new ApiError('VALIDATION_ERROR', 'Invalid student verification', input.error.flatten())
-    return context.json(await repository.verifyStudent(auth.userId, input.data.classId, input.data.displayName, input.data.studentNoLast4, auth.identitySubject ?? `${auth.identityProvider}:${auth.userId}`))
+    if (!allowRate(`onboarding:${auth.userId}`, 5, 60_000)) throw new ApiError('RATE_LIMITED', 'Too many attempts')
+    return context.json(await repository.verifyStudent(auth.userId, input.data.classId, input.data.displayName, input.data.studentNoLast4))
   })
   app.post('/api/v1/me/onboarding/electives', async (context) => {
     const auth = await resolveAuth(context.req.raw, config.devAuthEnabled === true, config.resolveMiniProgramSession, config.resolveWebSession)
@@ -325,7 +415,7 @@ export function createApp(config: ApiRuntimeConfig) {
   app.notFound((context) => context.json({ error: { code: 'NOT_FOUND', message: 'Resource not found', requestId: context.get('requestId') } }, 404))
   app.onError((error, context) => {
     const requestId = context.get('requestId') || crypto.randomUUID()
-    const apiError = error instanceof ApiError ? error : error instanceof RepositoryError ? new ApiError(error.code, error.message) : error instanceof DomainError ? new ApiError(error.code, error.message) : error instanceof Error && error.name === 'AuthDomainError' ? new ApiError(error.message.includes('Authentication') ? 'UNAUTHORIZED' : 'FORBIDDEN', error.message) : new ApiError('INTERNAL_ERROR', 'Internal server error')
+    const apiError = error instanceof ApiError ? error : error instanceof RepositoryError ? new ApiError(error.code === 'CONFLICT' ? 'ACCOUNT_BINDING_CONFLICT' : error.code === 'RATE_LIMITED' ? 'RATE_LIMITED' : error.code, error.message) : error instanceof DomainError ? new ApiError(error.code, error.message) : error instanceof Error && error.name === 'AuthDomainError' ? new ApiError(error.message.includes('Authentication') ? 'UNAUTHORIZED' : 'FORBIDDEN', error.message) : new ApiError('INTERNAL_ERROR', 'Internal server error')
     console.error(JSON.stringify({ level: 'error', event: 'request_error', requestId, code: apiError.code }))
     return context.json({ error: { code: apiError.code, message: apiError.message, requestId, ...(apiError.details === undefined ? {} : { details: apiError.details }) } }, errorStatus(apiError.code))
   })

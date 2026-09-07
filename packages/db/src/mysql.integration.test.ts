@@ -22,9 +22,8 @@ async function applyCleanMigrations(url: string): Promise<mysql.Pool> {
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
   if (!database || database === 'u_app' || database === 'attendance_dev') throw new Error('MYSQL_INTEGRATION_DATABASE_URL must target a dedicated non-production database')
   const pool = mysql.createPool({ uri: url, connectionLimit: 2, timezone: 'Z' })
-  const [currentRows] = await pool.query('SELECT DATABASE() AS database_name') as [{ database_name: string }[], unknown]
-  const current = currentRows[0]
-  if (!current || current.database_name !== database) throw new Error('MySQL integration database selection mismatch')
+  const [[current]] = await pool.query('SELECT DATABASE() AS database_name') as [{ database_name: string }[], unknown]
+  if (current.database_name !== database) throw new Error('MySQL integration database selection mismatch')
   const [existing] = await pool.query('SHOW TABLES') as [Record<string, unknown>[], unknown]
   if (existing.length) throw new Error('MySQL integration database must be empty before the test')
   for (const file of ['0000_clean_baseline.sql', '0001_exotic_earthquake.sql', '0002_orange_santa_claus.sql', '0003_deep_doctor_faustus.sql']) {
@@ -76,11 +75,28 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
     const adminWebSession = await repository.createAdminWebSession()
     expect((await repository.resolveWebSession(adminWebSession.token))?.capabilities.canManageProjects).toBe(true)
     const session = await repository.createMiniProgramSession('integration-openid-a')
-    const onboarding = await repository.verifyStudent(session.userId, classId, 'Fictional Student A', '0042', 'integration-openid-a')
+    const repeatedWechat = await repository.createProviderSession('WECHAT_MINIPROGRAM', 'integration-openid-a')
+    expect(repeatedWechat.userId).toBe(session.userId)
+    await repository.linkProviderIdentity(session.userId, 'CASDOOR', 'integration-casdoor-subject')
+    const casdoorSession = await repository.createProviderSession('CASDOOR', 'integration-casdoor-subject', 'Integration X-Lab User')
+    expect(casdoorSession.userId).toBe(session.userId)
+    const conflictingCasdoor = await repository.createProviderSession('CASDOOR', 'integration-conflicting-subject')
+    await expect(repository.linkProviderIdentity(session.userId, 'CASDOOR', 'integration-conflicting-subject')).rejects.toThrow('ACCOUNT_BINDING_CONFLICT')
+    expect(conflictingCasdoor.userId).not.toBe(session.userId)
+    const onboarding = await repository.verifyStudent(session.userId, classId, 'Fictional Student A', '0042')
     expect(onboarding.status).toBe('NEEDS_ELECTIVES')
+    const secondWechat = await repository.createMiniProgramSession('integration-openid-b')
+    await expect(repository.verifyStudent(secondWechat.userId, classId, 'Fictional Student A', '0042')).rejects.toThrow('ACCOUNT_BINDING_CONFLICT')
     await repository.enrollElectives(session.userId, [semester.courses.find((course) => course.kind === 'ELECTIVE')!.id])
     const timetable = await repository.getTimetable(session.userId)
     expect(timetable.items.length).toBeGreaterThan(0)
+
+    const challenge = await repository.createWebLoginChallenge('integration-browser-binding')
+    const approvedChallenge = await repository.approveWebLoginChallenge({ id: challenge.id, challengeToken: challenge.challengeToken, userId: session.userId })
+    expect(approvedChallenge.status).toBe('APPROVED')
+    const webConfirmation = await repository.consumeWebLoginChallenge(challenge.id, 'integration-browser-binding')
+    expect((await repository.resolveWebSession(webConfirmation.token))?.userId).toBe(session.userId)
+    await expect(repository.consumeWebLoginChallenge(challenge.id, 'integration-browser-binding')).rejects.toThrow()
 
     const first = timetable.items[0]!
     const start = new Date(first.scheduledStartAt)

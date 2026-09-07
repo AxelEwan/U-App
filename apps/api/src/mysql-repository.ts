@@ -25,11 +25,11 @@ import type {
   WebStudentClassOption,
 } from '@qzu/contracts'
 import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
-import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users, webAuthSessions } from '@qzu/db'
+import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users, webAuthSessions, webLoginChallenges } from '@qzu/db'
 import { and, asc, eq, like, sql } from 'drizzle-orm'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
-import { RepositoryError, type BusinessRepository } from './repository'
+import { RepositoryError, type BusinessRepository, type WebLoginChallenge, type WebLoginChallengeStatus } from './repository'
 import type { AuthContext } from '@qzu/auth'
 
 type MySqlDatabase = ReturnType<typeof createDatabase>['db']
@@ -54,6 +54,9 @@ function mapSession(row: SessionRow, project: ProjectSummary, now: Date): Sessio
 
 export class MySqlBusinessRepository implements BusinessRepository {
   public constructor(private readonly db: MySqlDatabase) {}
+  async listIdentityProviders(userId: string): Promise<readonly ('WECHAT_MINIPROGRAM' | 'CASDOOR')[]> {
+    try { return (await this.db.select({ provider: userIdentities.provider }).from(userIdentities).where(eq(userIdentities.userId, userId))).map((row) => row.provider) } catch { throw toRepositoryError() }
+  }
 
   async listProjects(): Promise<readonly ProjectSummary[]> { try { return (await this.db.select().from(projects).orderBy(asc(projects.createdAt))).map(mapProject) } catch { throw toRepositoryError() } }
   async createProject(input: CreateProjectInput, actor: AuthContext): Promise<ProjectSummary> {
@@ -242,7 +245,7 @@ export class MySqlBusinessRepository implements BusinessRepository {
         const binding = (await tx.select().from(studentBindings).where(eq(studentBindings.studentId, match.id)).limit(1))[0]
         userId = binding?.userId ?? crypto.randomUUID()
         await tx.insert(users).values({ id: userId, displayName: match.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: match.displayName } })
-        if (!binding) await tx.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId, provider: 'H5_WEB', providerSubject: `h5:${match.id}` })
+        if (!binding) await tx.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId })
         const required = await tx.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classId), eq(courses.kind, 'REQUIRED')))
         for (const item of required) if (item.projectId) {
           const existing = (await tx.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, item.projectId), eq(projectMembers.externalCode, match.studentNo))).limit(1))[0]
@@ -271,21 +274,22 @@ export class MySqlBusinessRepository implements BusinessRepository {
       const hash = createHash('sha256').update(token).digest('hex')
       const row = (await this.db.select({ session: webAuthSessions, user: users }).from(webAuthSessions).innerJoin(users, eq(webAuthSessions.userId, users.id)).where(eq(webAuthSessions.tokenHash, hash)).limit(1))[0]
       if (!row || row.session.revokedAt || row.session.expiresAt <= new Date()) return null
-      const admin = row.session.authMethod === 'ADMIN_PASSWORD' || Boolean((await this.db.select({ id: projectAdmins.id }).from(projectAdmins).where(eq(projectAdmins.userId, row.user.id)).limit(1))[0])
-      const binding = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, row.user.id)).limit(1))[0]
+      const admin = row.session.authMethod === 'ADMIN_PASSWORD' || row.session.authMethod === 'CASDOOR' || Boolean((await this.db.select({ id: projectAdmins.id }).from(projectAdmins).where(eq(projectAdmins.userId, row.user.id)).limit(1))[0])
       await this.db.update(webAuthSessions).set({ lastSeenAt: new Date() }).where(eq(webAuthSessions.id, row.session.id))
-      return { userId: row.user.id, displayName: row.user.displayName, avatarUrl: row.user.avatarUrl, identityProvider: admin ? 'ADMIN_PASSWORD' : 'H5_WEB', ...(binding?.providerSubject ? { identitySubject: binding.providerSubject } : {}), sessionType: 'WEB', capabilities: { canManageProjects: admin } }
+      const identityProvider = row.session.authMethod === 'CASDOOR' ? 'CASDOOR' : row.session.authMethod === 'WECHAT_CONFIRMATION' ? 'WECHAT_MINIPROGRAM' : row.session.authMethod === 'ADMIN_PASSWORD' ? 'ADMIN_PASSWORD' : 'H5_WEB'
+      const identity = identityProvider === 'CASDOOR' || identityProvider === 'WECHAT_MINIPROGRAM' ? (await this.db.select().from(userIdentities).where(and(eq(userIdentities.userId, row.user.id), eq(userIdentities.provider, identityProvider))).limit(1))[0] : undefined
+      return { userId: row.user.id, displayName: row.user.displayName, avatarUrl: row.user.avatarUrl, identityProvider, ...(identity?.providerSubject ? { identitySubject: identity.providerSubject } : {}), sessionType: 'WEB', capabilities: { canManageProjects: admin } }
     } catch { throw toRepositoryError() }
   }
-  async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string, providerSubject: string): Promise<OnboardingResponse> {
+  async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string): Promise<OnboardingResponse> {
     try {
       const match = (await this.db.select().from(students).where(and(eq(students.classId, classId), eq(students.displayName, displayName), like(students.studentNo, `%${studentNoLast4}`))).limit(1))[0]
       if (!match) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
-      const studentBinding = (await this.db.select().from(studentBindings).where(and(eq(studentBindings.studentId, match.id), eq(studentBindings.provider, 'WECHAT_MINIPROGRAM'))).limit(1))[0]
-      const conflict = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0] ?? (await this.db.select().from(studentBindings).where(eq(studentBindings.providerSubject, providerSubject)).limit(1))[0]
-      if (studentBinding || conflict) throw new RepositoryError('NOT_FOUND', 'Student or identity is already bound')
+      const studentBinding = (await this.db.select().from(studentBindings).where(eq(studentBindings.studentId, match.id)).limit(1))[0]
+      const userBinding = (await this.db.select().from(studentBindings).where(eq(studentBindings.userId, userId)).limit(1))[0]
+      if ((studentBinding && studentBinding.userId !== userId) || (userBinding && userBinding.studentId !== match.id)) throw new RepositoryError('CONFLICT', 'ACCOUNT_BINDING_CONFLICT')
       await this.db.insert(users).values({ id: userId, displayName: match.displayName, avatarUrl: null }).onDuplicateKeyUpdate({ set: { displayName: match.displayName } })
-      await this.db.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId, provider: 'WECHAT_MINIPROGRAM', providerSubject })
+      if (!studentBinding) await this.db.insert(studentBindings).values({ id: crypto.randomUUID(), studentId: match.id, userId })
       const required = await this.db.select({ projectId: courses.projectId }).from(classTimetable).innerJoin(courses, eq(classTimetable.courseId, courses.id)).where(and(eq(classTimetable.classId, classId), eq(courses.kind, 'REQUIRED')))
       for (const item of required) if (item.projectId) {
         const existing = (await this.db.select({ id: projectMembers.id }).from(projectMembers).where(and(eq(projectMembers.projectId, item.projectId), eq(projectMembers.externalCode, match.studentNo))).limit(1))[0]
@@ -357,14 +361,19 @@ export class MySqlBusinessRepository implements BusinessRepository {
       return { imported, skipped, conflicts }
     } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
   }
-  async createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }> {
+  async createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }> { return this.createProviderSession('WECHAT_MINIPROGRAM', providerSubject) }
+  async createProviderSession(provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string, displayName = provider === 'WECHAT_MINIPROGRAM' ? '微信用户' : 'X-Lab 用户'): Promise<{ userId: string; token: string; displayName: string }> {
     try {
-      const identity = (await this.db.select().from(userIdentities).where(and(eq(userIdentities.provider, 'WECHAT_MINIPROGRAM'), eq(userIdentities.providerSubject, providerSubject))).limit(1))[0]
-      const userId = identity?.userId ?? crypto.randomUUID(); const displayName = '微信用户'
-      if (!identity) await this.db.transaction(async (tx) => { await tx.insert(users).values({ id: userId, displayName, avatarUrl: null }); await tx.insert(userIdentities).values({ id: crypto.randomUUID(), userId, provider: 'WECHAT_MINIPROGRAM', providerSubject }) })
+      const identity = (await this.db.select().from(userIdentities).where(and(eq(userIdentities.provider, provider), eq(userIdentities.providerSubject, providerSubject))).limit(1))[0]
+      const userId = identity?.userId ?? crypto.randomUUID()
+      const binding = (await this.db.select({ displayName: students.displayName }).from(studentBindings).innerJoin(students, eq(studentBindings.studentId, students.id)).where(eq(studentBindings.userId, userId)).limit(1))[0]
+      const resolvedName = binding?.displayName ?? displayName
+      if (!identity) await this.db.transaction(async (tx) => { await tx.insert(users).values({ id: userId, displayName: resolvedName, avatarUrl: null }); await tx.insert(userIdentities).values({ id: crypto.randomUUID(), userId, provider, providerSubject }) })
+      else await this.db.update(users).set({ displayName: resolvedName }).where(eq(users.id, userId))
       const token = crypto.randomUUID() + crypto.randomUUID()
-      await this.db.insert(miniProgramAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
-      return { userId, token, displayName }
+      if (provider === 'WECHAT_MINIPROGRAM') await this.db.insert(miniProgramAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      else await this.db.insert(webAuthSessions).values({ id: crypto.randomUUID(), userId, tokenHash: createHash('sha256').update(token).digest('hex'), authMethod: 'CASDOOR', expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      return { userId, token, displayName: resolvedName }
     } catch { throw toRepositoryError() }
   }
   async resolveMiniProgramSession(token: string): Promise<AuthContext | null> {
@@ -376,6 +385,54 @@ export class MySqlBusinessRepository implements BusinessRepository {
       await this.db.update(miniProgramAuthSessions).set({ lastSeenAt: new Date() }).where(eq(miniProgramAuthSessions.id, row.session.id))
       return { userId: row.user.id, displayName: row.user.displayName, avatarUrl: row.user.avatarUrl, identityProvider: 'WECHAT_MINIPROGRAM', identitySubject: row.identity.providerSubject, sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: Boolean(admin) } }
     } catch { throw toRepositoryError() }
+  }
+  async linkProviderIdentity(userId: string, provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string): Promise<void> {
+    try {
+      const existing = (await this.db.select().from(userIdentities).where(and(eq(userIdentities.provider, provider), eq(userIdentities.providerSubject, providerSubject))).limit(1))[0]
+      if (existing && existing.userId !== userId) throw new RepositoryError('CONFLICT', 'ACCOUNT_BINDING_CONFLICT')
+      if (!existing) await this.db.insert(userIdentities).values({ id: crypto.randomUUID(), userId, provider, providerSubject })
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async createWebLoginChallenge(browserBindingSecret: string): Promise<WebLoginChallenge> {
+    try {
+      const challengeToken = randomBytes(32).toString('base64url')
+      const shortCode = String(1000 + Math.floor(Math.random() * 9000))
+      const expiresAt = new Date(Date.now() + 2 * 60_000)
+      const id = crypto.randomUUID()
+      await this.db.insert(webLoginChallenges).values({ id, challengeHash: createHash('sha256').update(challengeToken).digest('hex'), shortCodeHash: createHash('sha256').update(shortCode).digest('hex'), browserBindingHash: createHash('sha256').update(browserBindingSecret).digest('hex'), status: 'PENDING', approvedUserId: null, expiresAt, approvedAt: null, consumedAt: null })
+      return { id, challengeToken, shortCode, expiresAt: expiresAt.toISOString(), status: 'PENDING' }
+    } catch { throw toRepositoryError() }
+  }
+  async getWebLoginChallenge(id: string, browserBindingSecret: string): Promise<WebLoginChallengeStatus | null> {
+    try {
+      const row = (await this.db.select().from(webLoginChallenges).where(and(eq(webLoginChallenges.id, id), eq(webLoginChallenges.browserBindingHash, createHash('sha256').update(browserBindingSecret).digest('hex')))).limit(1))[0]
+      if (!row) return null
+      if (row.status === 'PENDING' && row.expiresAt <= new Date()) { await this.db.update(webLoginChallenges).set({ status: 'EXPIRED' }).where(eq(webLoginChallenges.id, id)); row.status = 'EXPIRED' }
+      return { id: row.id, status: row.status, expiresAt: row.expiresAt.toISOString(), approvedAt: row.approvedAt?.toISOString() ?? null }
+    } catch { throw toRepositoryError() }
+  }
+  async approveWebLoginChallenge(input: { id?: string; challengeToken?: string; shortCode?: string; userId: string }): Promise<WebLoginChallengeStatus> {
+    try {
+      const hash = createHash('sha256').update(input.challengeToken ?? input.shortCode ?? '').digest('hex')
+      const where = input.id ? and(eq(webLoginChallenges.id, input.id), eq(webLoginChallenges.challengeHash, hash)) : and(eq(webLoginChallenges.shortCodeHash, hash), eq(webLoginChallenges.status, 'PENDING'))
+      const row = (await this.db.select().from(webLoginChallenges).where(where).limit(1))[0]
+      if (!row || row.status !== 'PENDING' || row.expiresAt <= new Date()) throw new RepositoryError('NOT_FOUND', 'Challenge is invalid or expired')
+      await this.db.update(webLoginChallenges).set({ status: 'APPROVED', approvedUserId: input.userId, approvedAt: new Date() }).where(and(eq(webLoginChallenges.id, row.id), eq(webLoginChallenges.status, 'PENDING')))
+      return { id: row.id, status: 'APPROVED', expiresAt: row.expiresAt.toISOString(), approvedAt: new Date().toISOString() }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
+  }
+  async consumeWebLoginChallenge(id: string, browserBindingSecret: string): Promise<{ userId: string; token: string; displayName: string }> {
+    try {
+      const bindingHash = createHash('sha256').update(browserBindingSecret).digest('hex')
+      const row = (await this.db.select().from(webLoginChallenges).where(and(eq(webLoginChallenges.id, id), eq(webLoginChallenges.browserBindingHash, bindingHash), eq(webLoginChallenges.status, 'APPROVED'))).limit(1))[0]
+      if (!row?.approvedUserId) throw new RepositoryError('NOT_FOUND', 'Challenge is not ready')
+      await this.db.update(webLoginChallenges).set({ status: 'CONSUMED', consumedAt: new Date() }).where(and(eq(webLoginChallenges.id, id), eq(webLoginChallenges.status, 'APPROVED')))
+      const user = (await this.db.select().from(users).where(eq(users.id, row.approvedUserId)).limit(1))[0]
+      if (!user) throw new RepositoryError('NOT_FOUND', 'User not found')
+      const token = crypto.randomUUID() + crypto.randomUUID()
+      await this.db.insert(webAuthSessions).values({ id: crypto.randomUUID(), userId: user.id, tokenHash: createHash('sha256').update(token).digest('hex'), authMethod: 'WECHAT_CONFIRMATION', expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000), revokedAt: null, lastSeenAt: new Date() })
+      return { userId: user.id, token, displayName: user.displayName }
+    } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() }
   }
   async upsertAttendancePolicy(projectId: string, input: CreateAttendancePolicyInput): Promise<AttendancePolicy> { try { const id = crypto.randomUUID(); const values = { id, projectId, rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters }; await this.db.insert(attendancePolicies).values(values).onDuplicateKeyUpdate({ set: { rosterMode: input.rosterMode, checkInOpenMinutesBefore: input.checkInOpenMinutesBefore, checkInCloseMinutesAfter: input.checkInCloseMinutesAfter, requireLocation: input.locationEnabled, requirePasscode: input.passcodeEnabled, locationName: input.locationName, centerLatitude: input.centerLatitude?.toString() ?? null, centerLongitude: input.centerLongitude?.toString() ?? null, radiusMeters: input.radiusMeters } }); const row = (await this.db.select().from(attendancePolicies).where(eq(attendancePolicies.projectId, projectId)).limit(1))[0]; if (!row) throw toRepositoryError(); return mapPolicy(row) } catch (error) { if (error instanceof RepositoryError) throw error; throw toRepositoryError() } }
 }

@@ -19,6 +19,7 @@ export const apiErrorCodeSchema = z.enum([
   'LOCATION_OUT_OF_RANGE',
   'PASSCODE_INVALID',
   'RATE_LIMITED',
+  'ACCOUNT_BINDING_CONFLICT',
   'INTERNAL_ERROR',
 ])
 
@@ -192,6 +193,7 @@ export const meResponseSchema = z.object({
   displayName: z.string().min(1),
   sessionType: z.enum(['WEB', 'MINI_PROGRAM', 'DEV']),
   identityProvider: z.enum(['WECHAT_MINIPROGRAM', 'CASDOOR', 'H5_WEB', 'ADMIN_PASSWORD', 'DEV']),
+  identityProviders: z.array(z.enum(['WECHAT_MINIPROGRAM', 'CASDOOR'])).default([]),
   capabilities: z.object({ canManageProjects: z.boolean() }),
 })
 
@@ -229,10 +231,19 @@ export const webLoginChallengeStatusSchema = z.enum([
 
 export const createWebLoginChallengeOutputSchema = z.object({
   challengeId: z.string().min(32),
+  challengeToken: z.string().min(32),
   shortCode: z.string().min(4).max(12),
   expiresAt: z.iso.datetime(),
   status: z.literal('PENDING'),
 })
+export const webLoginChallengeStatusResponseSchema = z.object({
+  challengeId: z.string().min(1),
+  status: webLoginChallengeStatusSchema,
+  expiresAt: z.iso.datetime(),
+  approvedAt: z.iso.datetime().nullable(),
+})
+export const webLoginChallengeApproveSchema = z.object({ challengeToken: z.string().min(32).max(512).optional() })
+export const casdoorLinkInputSchema = z.object({ code: z.string().trim().min(1).max(512) })
 
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>
 export type CheckInInput = z.infer<typeof checkInInputSchema>
@@ -273,3 +284,8 @@ export type WebStudentLoginOptionsResponse = z.infer<typeof webStudentLoginOptio
 export type StartAttendanceInput = z.infer<typeof startAttendanceInputSchema>
 export type AttendanceAdminActionInput = z.infer<typeof attendanceAdminActionInputSchema>
 export type AttendanceLiveResponse = z.infer<typeof attendanceLiveResponseSchema>
+export type WebLoginChallengeStatus = z.infer<typeof webLoginChallengeStatusSchema>
+export type CreateWebLoginChallengeOutput = z.infer<typeof createWebLoginChallengeOutputSchema>
+export type WebLoginChallengeStatusResponse = z.infer<typeof webLoginChallengeStatusResponseSchema>
+export type WebLoginChallengeApproveInput = z.infer<typeof webLoginChallengeApproveSchema>
+export type CasdoorLinkInput = z.infer<typeof casdoorLinkInputSchema>

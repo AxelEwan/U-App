@@ -30,20 +30,35 @@ import {
   type WebStudentClassOption,
 } from '@qzu/contracts'
 import { applyAttendanceAction, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes, DomainError } from '@qzu/core'
-import type { AuthContext } from '@qzu/auth'
+import type { AuthContext, IdentityProvider } from '@qzu/auth'
+import { createHash, randomBytes } from 'node:crypto'
 
 type FixedStudent = { id: string; studentNo: string; displayName: string; classId: string; active: boolean }
 type FixedSession = { summary: SessionSummary; courseId: string; classId: string; started: boolean; finalized: boolean }
 
 export class RepositoryError extends Error {
-  public constructor(public readonly code: 'DATABASE_UNAVAILABLE' | 'NOT_FOUND', message = 'Repository operation failed') {
+  public constructor(public readonly code: 'DATABASE_UNAVAILABLE' | 'NOT_FOUND' | 'CONFLICT' | 'RATE_LIMITED', message = 'Repository operation failed') {
     super(message)
     this.name = 'RepositoryError'
   }
 }
 export interface RosterImportResult { readonly imported: number; readonly skipped: number; readonly conflicts: number }
+export interface WebLoginChallenge {
+  readonly id: string
+  readonly challengeToken: string
+  readonly shortCode: string
+  readonly expiresAt: string
+  readonly status: 'PENDING'
+}
+export interface WebLoginChallengeStatus {
+  readonly id: string
+  readonly status: 'PENDING' | 'APPROVED' | 'DENIED' | 'CONSUMED' | 'EXPIRED'
+  readonly expiresAt: string
+  readonly approvedAt: string | null
+}
 
 export interface BusinessRepository {
+  listIdentityProviders(userId: string): Promise<readonly ('WECHAT_MINIPROGRAM' | 'CASDOOR')[]>
   listProjects(): Promise<readonly ProjectSummary[]>
   createProject(input: CreateProjectInput, actor: AuthContext): Promise<ProjectSummary>
   updateProject(id: string, input: UpdateProjectInput): Promise<ProjectSummary | null>
@@ -64,7 +79,7 @@ export interface BusinessRepository {
   listAttendance(sessionId: string): Promise<readonly AttendanceRecord[]>
   syncSemesterConfig(input: SemesterConfigInput, actor: AuthContext): Promise<SemesterConfigResponse>
   getOnboarding(userId: string): Promise<OnboardingResponse>
-  verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string, providerSubject: string): Promise<OnboardingResponse>
+  verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string): Promise<OnboardingResponse>
   enrollElectives(userId: string, courseIds: readonly string[]): Promise<OnboardingResponse>
   startAttendance(sessionId: string, durationMinutes: number, actor: AuthContext, now?: Date): Promise<SessionSummary>
   getLiveAttendance(sessionId: string, now?: Date): Promise<AttendanceLiveResponse>
@@ -78,10 +93,17 @@ export interface BusinessRepository {
   resolveWebSession(token: string): Promise<AuthContext | null>
   createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }>
   resolveMiniProgramSession(token: string): Promise<AuthContext | null>
+  createProviderSession(provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string, displayName?: string): Promise<{ userId: string; token: string; displayName: string }>
+  linkProviderIdentity(userId: string, provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string): Promise<void>
+  createWebLoginChallenge(browserBindingSecret: string): Promise<WebLoginChallenge>
+  getWebLoginChallenge(id: string, browserBindingSecret: string): Promise<WebLoginChallengeStatus | null>
+  approveWebLoginChallenge(input: { id?: string; challengeToken?: string; shortCode?: string; userId: string }): Promise<WebLoginChallengeStatus>
+  consumeWebLoginChallenge(id: string, browserBindingSecret: string): Promise<{ userId: string; token: string; displayName: string }>
 }
 
 const projectIds = { design: '00000000-0000-4000-8000-000000000001', methods: '00000000-0000-4000-8000-000000000002' } as const
 const plusMinutes = (date: Date, minutes: number) => new Date(date.getTime() + minutes * 60_000)
+const hashSecret = (value: string): string => createHash('sha256').update(value).digest('hex')
 
 function session(id: string, project: ProjectSummary, startAt: Date, endAt: Date, openAt: Date, closeAt: Date, now: Date): SessionSummary {
   return { id, projectId: project.id, projectName: project.name, scheduledStartAt: startAt.toISOString(), scheduledEndAt: endAt.toISOString(), checkInOpenAt: openAt.toISOString(), checkInCloseAt: closeAt.toISOString(), locationName: project.id === projectIds.design ? '设计楼 204' : '理科楼 108', status: deriveSessionStatus({ now, startAt, endAt, checkInOpenAt: openAt, checkInCloseAt: closeAt }) }
@@ -107,16 +129,19 @@ export class MemoryBusinessRepository implements BusinessRepository {
   private semester: SemesterConfigResponse | null = null
   private readonly fixedStudents = new Map<string, FixedStudent>()
   private readonly studentByUser = new Map<string, string>()
-  private readonly studentBySubject = new Map<string, string>()
+  private readonly providerIdentities = new Map<string, { userId: string; provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR'; providerSubject: string }>()
+  private readonly userDisplayNames = new Map<string, string>()
   private readonly electiveEnrollments = new Set<string>()
   private readonly fixedSessions = new Map<string, FixedSession>()
   private readonly miniSessions = new Map<string, { userId: string; expiresAt: number }>()
-  private readonly webSessions = new Map<string, { userId: string; admin: boolean; expiresAt: number }>()
+  private readonly webSessions = new Map<string, { userId: string; identityProvider: IdentityProvider; displayName: string; expiresAt: number }>()
+  private readonly webChallenges = new Map<string, { challengeHash: string; shortCodeHash: string; browserBindingHash: string; status: WebLoginChallengeStatus['status']; approvedUserId: string | null; approvedAt: number | null; expiresAt: number }>()
   public constructor() {
     for (const projectId of Object.values(projectIds)) {
       this.members.set(projectId, [{ id: crypto.randomUUID(), projectId, userId: '00000000-0000-4000-8000-000000000011', displayName: 'Dev Student', externalCode: null }])
     }
   }
+  listIdentityProviders(userId: string): Promise<readonly ('WECHAT_MINIPROGRAM' | 'CASDOOR')[]> { return Promise.resolve([...this.providerIdentities.values()].filter((identity) => identity.userId === userId).map((identity) => identity.provider)) }
   listProjects(): Promise<readonly ProjectSummary[]> { return Promise.resolve(this.projects) }
   createProject(input: CreateProjectInput, actor: AuthContext): Promise<ProjectSummary> {
     void actor
@@ -202,14 +227,28 @@ export class MemoryBusinessRepository implements BusinessRepository {
     return record
   }
   listAttendance(sessionId: string): Promise<readonly AttendanceRecord[]> { return Promise.resolve([...this.attendance.values()].filter((record) => record.sessionId === sessionId)) }
-  createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }> {
-    const existing = this.studentBySubject.get(providerSubject)
-    const userId = existing ? [...this.studentByUser.entries()].find(([, studentId]) => studentId === existing)?.[0] ?? crypto.randomUUID() : crypto.randomUUID()
+  createMiniProgramSession(providerSubject: string): Promise<{ userId: string; token: string; displayName: string }> { return this.createProviderSession('WECHAT_MINIPROGRAM', providerSubject) }
+  createProviderSession(provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string, displayName = provider === 'WECHAT_MINIPROGRAM' ? '微信用户' : 'X-Lab 用户'): Promise<{ userId: string; token: string; displayName: string }> {
+    const key = `${provider}:${providerSubject}`
+    const identity = this.providerIdentities.get(key)
+    const userId = identity?.userId ?? crypto.randomUUID()
+    if (!identity) this.providerIdentities.set(key, { userId, provider, providerSubject })
+    const student = this.fixedStudents.get(this.studentByUser.get(userId) ?? '')
+    const resolvedName = student?.displayName ?? displayName
+    this.userDisplayNames.set(userId, resolvedName)
     const token = crypto.randomUUID() + crypto.randomUUID()
-    this.miniSessions.set(token, { userId, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
-    return Promise.resolve({ userId, token, displayName: this.fixedStudents.get(existing ?? '')?.displayName ?? '微信用户' })
+    if (provider === 'WECHAT_MINIPROGRAM') this.miniSessions.set(token, { userId, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
+    else this.webSessions.set(token, { userId, identityProvider: 'CASDOOR', displayName: resolvedName, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
+    return Promise.resolve({ userId, token, displayName: resolvedName })
   }
-  resolveMiniProgramSession(token: string): Promise<AuthContext | null> { const value = this.miniSessions.get(token); if (!value || value.expiresAt <= Date.now()) return Promise.resolve(null); return Promise.resolve({ userId: value.userId, displayName: this.fixedStudents.get(this.studentByUser.get(value.userId) ?? '')?.displayName ?? '微信用户', identityProvider: 'WECHAT_MINIPROGRAM', sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: false } }) }
+  linkProviderIdentity(userId: string, provider: 'WECHAT_MINIPROGRAM' | 'CASDOOR', providerSubject: string): Promise<void> {
+    const key = `${provider}:${providerSubject}`
+    const existing = this.providerIdentities.get(key)
+    if (existing && existing.userId !== userId) throw new RepositoryError('CONFLICT', 'ACCOUNT_BINDING_CONFLICT')
+    this.providerIdentities.set(key, { userId, provider, providerSubject })
+    return Promise.resolve()
+  }
+  resolveMiniProgramSession(token: string): Promise<AuthContext | null> { const value = this.miniSessions.get(token); if (!value || value.expiresAt <= Date.now()) return Promise.resolve(null); return Promise.resolve({ userId: value.userId, displayName: this.fixedStudents.get(this.studentByUser.get(value.userId) ?? '')?.displayName ?? this.userDisplayNames.get(value.userId) ?? '微信用户', identityProvider: 'WECHAT_MINIPROGRAM', sessionType: 'MINI_PROGRAM', capabilities: { canManageProjects: false } }) }
 
   listWebStudentLoginOptions(): Promise<readonly WebStudentClassOption[]> {
     if (!this.semester) return Promise.resolve([])
@@ -224,18 +263,18 @@ export class MemoryBusinessRepository implements BusinessRepository {
     if (!userId) {
       userId = crypto.randomUUID()
       this.studentByUser.set(userId, student.id)
-      this.studentBySubject.set(`h5:${student.id}`, student.id)
     }
+    this.userDisplayNames.set(userId, student.displayName)
     this.refreshStudentMembership(student)
     const token = crypto.randomUUID() + crypto.randomUUID()
-    this.webSessions.set(token, { userId, admin: false, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
+    this.webSessions.set(token, { userId, identityProvider: 'H5_WEB', displayName: student.displayName, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
     return Promise.resolve({ userId, token, displayName: student.displayName })
   }
 
   createAdminWebSession(): Promise<{ userId: string; token: string; displayName: string }> {
     const userId = '00000000-0000-4000-8000-0000000000ad'
     const token = crypto.randomUUID() + crypto.randomUUID()
-    this.webSessions.set(token, { userId, admin: true, expiresAt: Date.now() + 12 * 60 * 60_000 })
+    this.webSessions.set(token, { userId, identityProvider: 'ADMIN_PASSWORD', displayName: '管理员', expiresAt: Date.now() + 12 * 60 * 60_000 })
     return Promise.resolve({ userId, token, displayName: '管理员' })
   }
 
@@ -243,7 +282,8 @@ export class MemoryBusinessRepository implements BusinessRepository {
     const value = this.webSessions.get(token)
     if (!value || value.expiresAt <= Date.now()) return Promise.resolve(null)
     const student = this.fixedStudents.get(this.studentByUser.get(value.userId) ?? '')
-    return Promise.resolve({ userId: value.userId, displayName: value.admin ? '管理员' : student?.displayName ?? '学生', identityProvider: value.admin ? 'ADMIN_PASSWORD' : 'H5_WEB', ...(value.admin ? {} : { identitySubject: `h5:${student?.id ?? value.userId}` }), sessionType: 'WEB', capabilities: { canManageProjects: value.admin } })
+    const admin = value.identityProvider === 'ADMIN_PASSWORD' || value.identityProvider === 'CASDOOR'
+    return Promise.resolve({ userId: value.userId, displayName: student?.displayName ?? value.displayName, identityProvider: value.identityProvider, sessionType: 'WEB', capabilities: { canManageProjects: admin } })
   }
 
   syncSemesterConfig(input: SemesterConfigInput, actor: AuthContext): Promise<SemesterConfigResponse> {
@@ -305,15 +345,16 @@ export class MemoryBusinessRepository implements BusinessRepository {
     return Promise.resolve({ status: student ? (selectedCourseIds.length || !(semester?.courses.some((course) => course.kind === 'ELECTIVE') ?? false) ? 'READY' : 'NEEDS_ELECTIVES') : 'NEEDS_BINDING', classOptions: semester?.classes ?? [], student: student ? { id: student.id, displayName: student.displayName, classId: student.classId } : null, electiveCourses: semester?.courses.filter((course) => course.kind === 'ELECTIVE') ?? [], selectedCourseIds })
   }
 
-  async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string, providerSubject: string): Promise<OnboardingResponse> {
+  async verifyStudent(userId: string, classId: string, displayName: string, studentNoLast4: string): Promise<OnboardingResponse> {
     if (!this.semester || !this.semester.classes.some((item) => item.id === classId)) throw new RepositoryError('NOT_FOUND', 'Class not found')
     const existingUser = this.studentByUser.get(userId)
     if (existingUser) return this.getOnboarding(userId)
     const student = [...this.fixedStudents.values()].find((item) => item.classId === classId && item.active && item.displayName === displayName && item.studentNo.endsWith(studentNoLast4))
     if (!student) throw new RepositoryError('NOT_FOUND', 'Student verification failed')
-    if (this.studentBySubject.has(providerSubject) || [...this.studentByUser.values()].includes(student.id)) throw new RepositoryError('NOT_FOUND', 'Student or identity is already bound')
+    const existingBindingUser = [...this.studentByUser.entries()].find(([, studentId]) => studentId === student.id)?.[0]
+    if (existingBindingUser && existingBindingUser !== userId) throw new RepositoryError('CONFLICT', 'ACCOUNT_BINDING_CONFLICT')
     this.studentByUser.set(userId, student.id)
-    this.studentBySubject.set(providerSubject, student.id)
+    this.userDisplayNames.set(userId, student.displayName)
     this.refreshStudentMembership(student)
     return this.getOnboarding(userId)
   }
@@ -384,6 +425,43 @@ export class MemoryBusinessRepository implements BusinessRepository {
       rows.push([member?.displayName ?? '', member?.externalCode ?? '', '', current.projectName, current.scheduledStartAt.slice(0, 10), current.scheduledStartAt, record.checkedInAt ?? '', record.status, record.source].map((value) => `"${String(value).replaceAll('"', '""')}"`).join(','))
     }
     return `\uFEFF${rows.join('\n')}\n`
+  }
+
+  createWebLoginChallenge(browserBindingSecret: string): Promise<WebLoginChallenge> {
+    const id = crypto.randomUUID()
+    const challengeToken = randomBytes(32).toString('base64url')
+    const shortCode = String(1000 + Math.floor(Math.random() * 9000))
+    const expiresAt = Date.now() + 2 * 60_000
+    this.webChallenges.set(id, { challengeHash: hashSecret(challengeToken), shortCodeHash: hashSecret(shortCode), browserBindingHash: hashSecret(browserBindingSecret), status: 'PENDING', approvedUserId: null, approvedAt: null, expiresAt })
+    return Promise.resolve({ id, challengeToken, shortCode, expiresAt: new Date(expiresAt).toISOString(), status: 'PENDING' })
+  }
+
+  getWebLoginChallenge(id: string, browserBindingSecret: string): Promise<WebLoginChallengeStatus | null> {
+    const value = this.webChallenges.get(id)
+    if (!value || value.browserBindingHash !== hashSecret(browserBindingSecret)) return Promise.resolve(null)
+    if (value.status === 'PENDING' && value.expiresAt <= Date.now()) value.status = 'EXPIRED'
+    return Promise.resolve({ id, status: value.status, expiresAt: new Date(value.expiresAt).toISOString(), approvedAt: value.approvedAt ? new Date(value.approvedAt).toISOString() : null })
+  }
+
+  approveWebLoginChallenge(input: { id?: string; challengeToken?: string; shortCode?: string; userId: string }): Promise<WebLoginChallengeStatus> {
+    const value = input.id ? this.webChallenges.get(input.id) : [...this.webChallenges.values()].find((item) => input.challengeToken ? item.challengeHash === hashSecret(input.challengeToken) : item.shortCodeHash === hashSecret(input.shortCode ?? ''))
+    const id = input.id ?? [...this.webChallenges.entries()].find(([, item]) => item === value)?.[0]
+    if (!value || !id || value.status !== 'PENDING' || value.expiresAt <= Date.now()) throw new RepositoryError('NOT_FOUND', 'Challenge is invalid or expired')
+    if (input.id && (!input.challengeToken || value.challengeHash !== hashSecret(input.challengeToken))) throw new RepositoryError('NOT_FOUND', 'Challenge is invalid or expired')
+    value.status = 'APPROVED'; value.approvedUserId = input.userId; value.approvedAt = Date.now()
+    return Promise.resolve({ id, status: value.status, expiresAt: new Date(value.expiresAt).toISOString(), approvedAt: new Date(value.approvedAt).toISOString() })
+  }
+
+  consumeWebLoginChallenge(id: string, browserBindingSecret: string): Promise<{ userId: string; token: string; displayName: string }> {
+    const value = this.webChallenges.get(id)
+    if (!value || value.browserBindingHash !== hashSecret(browserBindingSecret) || value.status !== 'APPROVED' || !value.approvedUserId) throw new RepositoryError('NOT_FOUND', 'Challenge is not ready')
+    value.status = 'CONSUMED'
+    const userId = value.approvedUserId
+    const student = this.fixedStudents.get(this.studentByUser.get(userId) ?? '')
+    const displayName = student?.displayName ?? this.userDisplayNames.get(userId) ?? '微信用户'
+    const token = crypto.randomUUID() + crypto.randomUUID()
+    this.webSessions.set(token, { userId, identityProvider: 'WECHAT_MINIPROGRAM', displayName, expiresAt: Date.now() + 30 * 24 * 60 * 60_000 })
+    return Promise.resolve({ userId, token, displayName })
   }
 
   importRoster(_semesterCode: string, entries: readonly RosterEntry[], actor: AuthContext): Promise<RosterImportResult> {

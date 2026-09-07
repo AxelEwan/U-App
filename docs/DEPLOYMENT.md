@@ -69,9 +69,15 @@ AUTH_SESSION_SECRET=replace-with-a-long-random-secret
 CORS_ORIGINS=https://u.x-lab.top,https://qzu-admin.x-lab.top
 DEV_AUTH_ENABLED=false
 ADMIN_LOGIN_SECRET_HASH=scrypt$16384$8$1$<base64-salt>$<base64-digest>
+CASDOOR_ISSUER=https://auth.x-lab.top
+CASDOOR_CLIENT_ID=f899dd897341c8548ba8
+CASDOOR_CLIENT_SECRET=<server-only-secret>
+CASDOOR_REDIRECT_URI=https://api-u.x-lab.top/api/v1/auth/casdoor/callback
+WECHAT_APP_ID=wx1dee496d82ce69b0
+WECHAT_APP_SECRET=<server-only-secret>
 ```
 
-当前 API 配置模块读取的是 `API_PORT`，不是 `PORT`，所以生产端口应配置为 `API_PORT=3004`。宝塔界面中的监听端口仍填写 `3004`。不要把真实 `DATABASE_URL`、`AUTH_SESSION_SECRET` 或其他 secret 写入仓库、README、文档或前端环境变量。
+当前 API 配置模块读取的是 `API_PORT`，不是 `PORT`，所以生产端口应配置为 `API_PORT=3004`。宝塔界面中的监听端口仍填写 `3004`。不要把真实 `DATABASE_URL`、`AUTH_SESSION_SECRET`、`CASDOOR_CLIENT_SECRET`、`WECHAT_APP_SECRET` 或其他 secret 写入仓库、README、文档或前端环境变量。
 
 建议限制文件权限：
 
@@ -250,7 +256,10 @@ workflow 的 SSH 连接强制 `BatchMode=yes`、`StrictHostKeyChecking=yes` 和�
 临时 Admin Web 登录还必须配置 API-only 的 `ADMIN_LOGIN_SECRET_HASH`。生产环境不配置 `NEXT_PUBLIC_ADMIN_LOGIN_SECRET_HASH`，也不发送 `X-Dev-User`。
 - `WECHAT_APP_ID`
 - `WECHAT_APP_SECRET`
-- 未来启用时的 `CASDOOR_*` server-only credentials
+- `CASDOOR_ISSUER`
+- `CASDOOR_CLIENT_ID`
+- `CASDOOR_CLIENT_SECRET`
+- `CASDOOR_REDIRECT_URI`
 
 ### Vercel ENV
 
@@ -279,15 +288,15 @@ Admin 项目 `u-app-admin` 使用 repository root，Next.js Framework Preset，�
 
 ### H5 Student ENV
 
-H5 登录使用 `GET /api/v1/auth/web/student/options` 和 `POST /api/v1/auth/web/student/login`。学生选择真实 roster 中的班级、姓名并提交学号后四位；API 签发 `qzu_web_session` HttpOnly/Secure/SameSite=Lax cookie。H5 不发送 `X-Dev-User`，也不把 `userId` 或 `studentId` 交给客户端指定。
+生产 H5 登录使用 `POST /api/v1/auth/web/challenges` 创建两分钟 challenge，浏览器轮询状态，已认证小程序通过 QR payload 或 4 位码确认，浏览器再调用 consume 获得 `qzu_web_session` HttpOnly/Secure/SameSite=Lax cookie。H5 不发送 `X-Dev-User`，也不把 `userId` 或 `studentId` 交给客户端指定。Roster class/name/last-four 登录只作为本地/集成 fallback。
 
 ### 微信 ENV
 
-API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，同时签发 HttpOnly session cookie 和小程序 bearer session。两项值只能属于 API server-side environment，不得进入 Taro bundle。生产 Weapp 构建公开配置 `TARO_APP_ENABLE_WECHAT_AUTH=true` 后才会调用 `wx.login`；H5 使用上面的 roster 登录，不会使用 Dev Auth 冒充生产身份。
+API 已提供 `POST /api/v1/auth/wechat/login`：服务端使用 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 调用 code2Session，同时签发 HttpOnly session cookie 和小程序 bearer session。两项值只能属于 API server-side environment，不得进入 Taro bundle。Weapp 由用户点击“微信登录”后调用 `wx.login`；H5 使用上面的 challenge 登录，不会使用 Dev Auth 冒充生产身份。
 
 ### Casdoor ENV
 
-Casdoor 尚未接入。未来的 `CASDOOR_ISSUER`、`CASDOOR_CLIENT_ID`、`CASDOOR_CLIENT_SECRET` 只能由 API 管理端认证流程使用，client secret 不得进入前端。
+Casdoor 已接入 server-side OIDC：`CASDOOR_ISSUER`、`CASDOOR_CLIENT_ID`、`CASDOOR_CLIENT_SECRET`、`CASDOOR_REDIRECT_URI` 只能由 API 认证流程使用，client secret 不得进入前端。Admin 页面通过 `/api/v1/auth/casdoor/start?mode=admin` 发起登录。
 
 ## M3.5 数据库 migration 准备
 
@@ -330,4 +339,4 @@ MYSQL_INTEGRATION_DATABASE_URL='mysql://user:password@127.0.0.1:3306/u_app_integ
 pnpm test:mysql
 ```
 
-测试会先确认 `SELECT DATABASE()`、空表状态，再从 `0000_clean_baseline.sql` 到 `0003_deep_doctor_faustus.sql` 顺序执行，覆盖固定学期、roster、微信绑定、选修课、个人课表、NORMAL 签到、重复签到、迟到、finalize、管理员覆盖、审计和 CSV。没有提供专用 URL 时该测试明确 skip；它不会连接或清理生产 `u_app`。
+测试会先确认 `SELECT DATABASE()`、空表状态，再从 `0000_clean_baseline.sql` 到 `0003_deep_doctor_faustus.sql` 顺序执行，覆盖固定学期、roster、微信绑定、选修课、个人课表、NORMAL 签到、重复签到、迟到、finalize、管理员覆盖、审计和 CSV。CI 会通过 MySQL 8.4 service 提供 `u_app_integration` 并设置 `MYSQL_INTEGRATION_REQUIRED=true`，因此缺少 URL 或 migration/测试失败都会让 CI 失败；它不会连接或清理生产 `u_app`。

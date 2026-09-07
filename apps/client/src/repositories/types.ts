@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, CreateWebLoginChallengeOutput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebLoginChallengeStatusResponse } from '@qzu/contracts'
 
 export interface ProjectRepository {
   listProjects(): Promise<readonly ProjectSummary[]>
@@ -20,6 +20,12 @@ export interface SessionRepository {
 }
 
 export interface TodayRepository {
+  loginWechat(): Promise<{ userId: string; displayName: string }>
+  createWebLoginChallenge(): Promise<CreateWebLoginChallengeOutput>
+  getWebLoginChallengeStatus(challengeId: string): Promise<WebLoginChallengeStatusResponse>
+  approveWebLoginChallengeByCode(shortCode: string): Promise<WebLoginChallengeStatusResponse>
+  approveWebLoginChallenge(challengeId: string, challengeToken: string): Promise<WebLoginChallengeStatusResponse>
+  consumeWebLoginChallenge(challengeId: string): Promise<{ userId: string; displayName: string }>
   getToday(): Promise<TodayResponse>
   getMe(): Promise<MeResponse>
   getTimetable(): Promise<TimetableResponse>

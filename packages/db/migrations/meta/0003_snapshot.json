@@ -1996,11 +1996,10 @@
         }
       },
       "indexes": {
-        "student_bindings_student_provider_uq": {
-          "name": "student_bindings_student_provider_uq",
+        "student_bindings_student_uq": {
+          "name": "student_bindings_student_uq",
           "columns": [
-            "student_id",
-            "provider"
+            "student_id"
           ],
           "isUnique": true
         },
@@ -2008,14 +2007,6 @@
           "name": "student_bindings_user_uq",
           "columns": [
             "user_id"
-          ],
-          "isUnique": true
-        },
-        "student_bindings_subject_uq": {
-          "name": "student_bindings_subject_uq",
-          "columns": [
-            "provider",
-            "provider_subject"
           ],
           "isUnique": true
         }

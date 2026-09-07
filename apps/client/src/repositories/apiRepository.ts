@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebStudentClassOption } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, CreateWebLoginChallengeOutput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebLoginChallengeStatusResponse, WebStudentClassOption } from '@qzu/contracts'
 import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
@@ -6,28 +6,42 @@ import type { ClientRepository } from './types'
 const API_BASE_URL = process.env.TARO_APP_API_BASE_URL
   ?? (process.env.TARO_ENV === 'weapp' ? 'http://127.0.0.1:3004' : 'http://localhost:3004')
 const DEV_AUTH_HEADER_ENABLED = process.env.NODE_ENV !== 'production' && process.env.TARO_APP_ENABLE_DEV_AUTH === 'true'
-const WECHAT_AUTH_ENABLED = process.env.TARO_APP_ENABLE_WECHAT_AUTH === 'true' && process.env.TARO_ENV === 'weapp'
 interface ListResponse<T> { readonly items: T[] }
 
 export class ApiRepository implements ClientRepository {
   private devUser: 'student' | 'admin' = 'student'
-  private authReady: Promise<void> | null = null
   private sessionToken: string | null = null
   public constructor(private readonly baseUrl = API_BASE_URL) {}
   setDevRole(role: 'STUDENT' | 'ADMIN'): void {
     if (DEV_AUTH_HEADER_ENABLED) this.devUser = role === 'ADMIN' ? 'admin' : 'student'
   }
 
+  async loginWechat(): Promise<{ userId: string; displayName: string }> {
+    const { code } = await Taro.login()
+    if (!code) throw new Error('WECHAT_LOGIN_CODE_MISSING')
+    const response = await Taro.request<{ userId: string; displayName: string; token?: string }>({ url: `${this.baseUrl}/api/v1/auth/wechat/login`, method: 'POST', data: { code }, credentials: 'include' })
+    if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`API request failed: ${response.statusCode}`)
+    this.sessionToken = response.data.token ?? null
+    return { userId: response.data.userId, displayName: response.data.displayName }
+  }
+
+  createWebLoginChallenge(): Promise<CreateWebLoginChallengeOutput> {
+    return this.request<CreateWebLoginChallengeOutput>('/api/v1/auth/web/challenges', { method: 'POST' })
+  }
+  getWebLoginChallengeStatus(challengeId: string): Promise<WebLoginChallengeStatusResponse> {
+    return this.request<WebLoginChallengeStatusResponse>(`/api/v1/auth/web/challenges/${challengeId}`)
+  }
+  approveWebLoginChallengeByCode(shortCode: string): Promise<WebLoginChallengeStatusResponse> {
+    return this.request<WebLoginChallengeStatusResponse>(`/api/v1/auth/web/challenges/code/${encodeURIComponent(shortCode)}/approve`, { method: 'POST' })
+  }
+  approveWebLoginChallenge(challengeId: string, challengeToken: string): Promise<WebLoginChallengeStatusResponse> {
+    return this.request<WebLoginChallengeStatusResponse>(`/api/v1/auth/web/challenges/${challengeId}/approve`, { method: 'POST', data: { challengeToken } })
+  }
+  consumeWebLoginChallenge(challengeId: string): Promise<{ userId: string; displayName: string }> {
+    return this.request<{ userId: string; displayName: string }>(`/api/v1/auth/web/challenges/${challengeId}/consume`, { method: 'POST' })
+  }
+
   private async request<T>(path: string, options: Omit<Taro.request.Option, 'url'> = {}): Promise<T> {
-    if (WECHAT_AUTH_ENABLED && !path.startsWith('/api/v1/auth/')) {
-      this.authReady ??= Taro.login().then(({ code }) => {
-        if (!code) throw new Error('WECHAT_LOGIN_CODE_MISSING')
-        return Taro.request<{ token?: string }>({ url: `${this.baseUrl}/api/v1/auth/wechat/login`, method: 'POST', data: { code } }).then((login) => {
-          this.sessionToken = login.data.token ?? null
-        })
-      })
-      await this.authReady
-    }
     const authHeader = this.sessionToken ? { Authorization: `Bearer ${this.sessionToken}` } : {}
     const devHeader = DEV_AUTH_HEADER_ENABLED ? { 'X-Dev-User': this.devUser } : {}
     const response = await Taro.request<T>({

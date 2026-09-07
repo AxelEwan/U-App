@@ -24,6 +24,7 @@ const apiEnvSchema = z
     CASDOOR_ISSUER: z.string().url().default('https://auth.x-lab.top'),
     CASDOOR_CLIENT_ID: optionalSecret,
     CASDOOR_CLIENT_SECRET: optionalSecret,
+    CASDOOR_REDIRECT_URI: z.string().url().default('https://api-u.x-lab.top/api/v1/auth/casdoor/callback'),
     CASDOOR_ADMIN_MODE: z.enum(['all_authenticated']).optional(),
     WECHAT_APP_ID: optionalSecret,
     WECHAT_APP_SECRET: optionalSecret,
@@ -59,6 +60,9 @@ const apiEnvSchema = z
     }
     if (env.REPOSITORY_MODE === 'mysql' && !env.DATABASE_URL) {
       context.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'DATABASE_URL is required when REPOSITORY_MODE=mysql' })
+    }
+    if (isProduction && (!env.CASDOOR_CLIENT_ID || !env.CASDOOR_CLIENT_SECRET)) {
+      context.addIssue({ code: 'custom', path: ['CASDOOR_CLIENT_ID'], message: 'Production Casdoor credentials are required' })
     }
   })
 

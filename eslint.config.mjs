@@ -27,9 +27,7 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
       parserOptions: {
-        projectService: {
-          allowDefaultProject: ['packages/db/src/mysql.integration.test.ts'],
-        },
+        projectService: { allowDefaultProject: ['packages/db/src/mysql.integration.test.ts'] },
         tsconfigRootDir: import.meta.dirname,
       },
     },
