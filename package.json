@@ -20,7 +20,11 @@
     "db:generate": "pnpm --filter @qzu/db db:generate",
     "db:migrate": "node packages/db/scripts/migrate-safe.mjs",
     "db:import-roster": "pnpm --filter @qzu/db db:import-roster",
-    "db:migrate:safe": "node packages/db/scripts/migrate-safe.mjs"
+    "db:migrate:safe": "node packages/db/scripts/migrate-safe.mjs",
+    "db:import-academic": "pnpm --filter @qzu/api exec tsx ../../packages/db/scripts/import-academic-config.mjs",
+    "db:materialize-sessions": "pnpm --filter @qzu/api exec tsx ../../packages/db/scripts/materialize-sessions.ts",
+    "db:production-preflight": "node packages/db/scripts/production-preflight.mjs",
+    "db:verify-core": "node packages/db/scripts/verify-core.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

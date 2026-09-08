@@ -63,6 +63,11 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
         { classCode: 'TEST-01', courseCode: 'ELE-01', weekday: 2, startPeriod: 1, endPeriod: 1, classroom: 'Test Room 2', teacher: null, startWeek: 1, endWeek: 2, weekPattern: 'ALL', specifiedWeeks: null },
       ],
     }, admin)
+    const [policyRows] = await pool.query(
+      'SELECT COUNT(*) AS count FROM attendance_policies WHERE project_id IN (SELECT project_id FROM courses WHERE semester_id = ?)',
+      [semester.semester.id],
+    ) as [{ count: number }[], unknown]
+    expect(Number(policyRows[0]?.count ?? 0)).toBe(2)
     const imported = await repository.importRoster('integration-2026', [
       { classCode: 'TEST-01', studentNo: '20260042', displayName: 'Fictional Student A' },
       { classCode: 'TEST-01', studentNo: '20260043', displayName: 'Fictional Student B' },
@@ -85,6 +90,11 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
     expect(conflictingCasdoor.userId).not.toBe(session.userId)
     const onboarding = await repository.verifyStudent(session.userId, classId, 'Fictional Student A', '0042')
     expect(onboarding.status).toBe('NEEDS_ELECTIVES')
+    const [boundMembers] = await pool.query(
+      'SELECT COUNT(*) AS count FROM project_members WHERE user_id = ? AND external_code = ?',
+      [session.userId, '20260042'],
+    ) as [{ count: number }[], unknown]
+    expect(Number(boundMembers[0]?.count ?? 0)).toBeGreaterThan(0)
     const secondWechat = await repository.createMiniProgramSession('integration-openid-b')
     await expect(repository.verifyStudent(secondWechat.userId, classId, 'Fictional Student A', '0042')).rejects.toThrow('ACCOUNT_BINDING_CONFLICT')
     await repository.enrollElectives(session.userId, [semester.courses.find((course) => course.kind === 'ELECTIVE')!.id])
@@ -123,6 +133,15 @@ describe('MySQL integration', () => it('persists the class attendance flow in My
     const csv = await repository.exportAttendanceCsv(first.id)
     expect(csv.startsWith('\uFEFF')).toBe(true)
     expect(csv).toContain('Fictional Student A')
+
+    const reconnected = createDatabase(url)
+    try {
+      const persistedRepository = new MySqlBusinessRepository(reconnected.db)
+      expect(await persistedRepository.getSession(first.id)).not.toBeNull()
+      expect((await persistedRepository.listAttendance(first.id)).length).toBeGreaterThan(0)
+    } finally {
+      await reconnected.close()
+    }
   } finally {
     await database.close()
     await pool.end()

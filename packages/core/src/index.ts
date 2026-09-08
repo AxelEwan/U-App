@@ -1,4 +1,5 @@
 export * from './attendance'
+export * from './academic'
 export * from './errors'
 export * from './geo'
 export * from './recurrence'

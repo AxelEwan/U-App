@@ -24,7 +24,7 @@ import type {
   UpdateScheduleRuleInput,
   WebStudentClassOption,
 } from '@qzu/contracts'
-import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateWeeklySessionTimes } from '@qzu/core'
+import { DomainError, assertAttendanceEligible, deriveSessionStatus, generateTimetableOccurrences, generateWeeklySessionTimes } from '@qzu/core'
 import { createDatabase, attendanceAuditLogs, attendancePolicies, attendanceRecords, classTimetable, classes as classTable, courses, eventSessions, miniProgramAuthSessions, projectAdmins, projectMembers, projects, scheduleRules, semesterConfigs, studentBindings, studentCourseEnrollments, students, userIdentities, users, webAuthSessions, webLoginChallenges } from '@qzu/db'
 import { and, asc, eq, like, sql } from 'drizzle-orm'
 import { createHash, randomBytes } from 'node:crypto'
@@ -194,6 +194,7 @@ export class MySqlBusinessRepository implements BusinessRepository {
           const projectId = crypto.randomUUID(); const courseId = crypto.randomUUID(); courseIds.set(item.courseCode, { id: courseId, projectId })
           await tx.insert(projects).values({ id: projectId, name: item.name, description: item.teacher ?? null, type: 'COURSE', timezone: 'Asia/Shanghai', effectiveStartDate: input.startDate, effectiveEndDate: input.endDate, status: 'ACTIVE', createdBy: actor.userId })
           await tx.insert(projectAdmins).values({ id: crypto.randomUUID(), projectId, userId: actor.userId, role: 'OWNER' })
+          await tx.insert(attendancePolicies).values({ id: crypto.randomUUID(), projectId, rosterMode: 'ROSTER', checkInOpenMinutesBefore: 15, checkInCloseMinutesAfter: 15, requireLocation: false, requirePasscode: false, locationName: null, centerLatitude: null, centerLongitude: null, radiusMeters: null, passcodeHash: null }).onDuplicateKeyUpdate({ set: { rosterMode: 'ROSTER', checkInOpenMinutesBefore: 15, checkInCloseMinutesAfter: 15, requireLocation: false, requirePasscode: false } })
           await tx.insert(courses).values({ id: courseId, semesterId, projectId, courseCode: item.courseCode, name: item.name, kind: item.kind, teacher: item.teacher ?? null })
         }
         const periods = new Map(input.standardPeriods.map((period) => [period.period, period]))
@@ -202,10 +203,10 @@ export class MySqlBusinessRepository implements BusinessRepository {
           const classId = classIds.get(item.classCode); const course = courseIds.get(item.courseCode); const start = periods.get(item.startPeriod); const end = periods.get(item.endPeriod)
           if (!classId || !course || !start || !end) throw new Error('Invalid timetable reference')
           await tx.insert(classTimetable).values({ id: crypto.randomUUID(), classId, courseId: course.id, weekday: item.weekday, startPeriod: item.startPeriod, endPeriod: item.endPeriod, classroom: item.classroom ?? null, teacher: item.teacher ?? null, startWeek: item.startWeek, endWeek: item.endWeek, weekPattern: item.weekPattern, specifiedWeeks: item.specifiedWeeks ?? null })
-          const generated = generateWeeklySessionTimes({ timezone: 'Asia/Shanghai', startDate: addDays(input.startDate, (item.startWeek - 1) * 7), endDate: addDays(input.startDate, item.endWeek * 7 - 1), weekdays: [item.weekday], intervalWeeks: item.weekPattern === 'ALL' ? 1 : 2, startTime: start.startTime, endTime: end.endTime })
+          const generated = generateTimetableOccurrences({ code: input.code, name: input.name, startDate: input.startDate, endDate: input.endDate, active: input.active, standardPeriods: input.standardPeriods }, { ...item, classroom: item.classroom ?? null, teacher: item.teacher ?? null, weekPattern: item.weekPattern, specifiedWeeks: item.specifiedWeeks ?? null }, start.startTime, end.endTime)
           const ruleId = crypto.randomUUID()
           await tx.insert(scheduleRules).values({ id: ruleId, projectId: course.projectId, weekdays: [item.weekday], localStartTime: start.startTime, localEndTime: end.endTime, startDate: addDays(input.startDate, (item.startWeek - 1) * 7), endDate: addDays(input.startDate, item.endWeek * 7 - 1), intervalWeeks: item.weekPattern === 'ALL' ? 1 : 2, timezone: 'Asia/Shanghai' })
-          for (const occurrence of generated) await tx.insert(eventSessions).values({ id: crypto.randomUUID(), projectId: course.projectId, scheduleRuleId: ruleId, courseId: course.id, scheduledStartAt: occurrence.scheduledStartAt, scheduledEndAt: occurrence.scheduledEndAt, checkinOpenAt: occurrence.scheduledStartAt, checkinCloseAt: occurrence.scheduledEndAt, locationName: item.classroom ?? null, status: 'SCHEDULED' })
+          for (const occurrence of generated) await tx.insert(eventSessions).values({ id: crypto.randomUUID(), projectId: course.projectId, scheduleRuleId: ruleId, courseId: course.id, scheduledStartAt: occurrence.scheduledStartAt, scheduledEndAt: occurrence.scheduledEndAt, checkinOpenAt: new Date(occurrence.scheduledStartAt.getTime() - 15 * 60_000), checkinCloseAt: new Date(occurrence.scheduledEndAt.getTime() + 15 * 60_000), locationName: item.classroom ?? null, status: 'SCHEDULED' })
         }
       })
       return this.readSemesterConfig(semesterId)
