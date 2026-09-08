@@ -48,21 +48,11 @@ const apiEnvSchema = z
         message: 'AUTH_SESSION_SECRET is required in production',
       })
     }
-    if (isProduction && !env.ADMIN_LOGIN_SECRET_HASH) {
-      context.addIssue({
-        code: 'custom',
-        path: ['ADMIN_LOGIN_SECRET_HASH'],
-        message: 'ADMIN_LOGIN_SECRET_HASH is required in production',
-      })
-    }
     if (isProduction && env.REPOSITORY_MODE !== 'mysql') {
       context.addIssue({ code: 'custom', path: ['REPOSITORY_MODE'], message: 'Production must use the MySQL repository' })
     }
     if (env.REPOSITORY_MODE === 'mysql' && !env.DATABASE_URL) {
       context.addIssue({ code: 'custom', path: ['DATABASE_URL'], message: 'DATABASE_URL is required when REPOSITORY_MODE=mysql' })
-    }
-    if (isProduction && (!env.CASDOOR_CLIENT_ID || !env.CASDOOR_CLIENT_SECRET)) {
-      context.addIssue({ code: 'custom', path: ['CASDOOR_CLIENT_ID'], message: 'Production Casdoor credentials are required' })
     }
   })
 
