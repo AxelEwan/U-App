@@ -24,7 +24,8 @@
     "db:import-academic": "pnpm --filter @qzu/api exec tsx ../../packages/db/scripts/import-academic-config.mjs",
     "db:materialize-sessions": "pnpm --filter @qzu/api exec tsx ../../packages/db/scripts/materialize-sessions.ts",
     "db:production-preflight": "node packages/db/scripts/production-preflight.mjs",
-    "db:verify-core": "node packages/db/scripts/verify-core.mjs"
+    "db:verify-core": "node packages/db/scripts/verify-core.mjs",
+    "production:env-check": "node packages/db/scripts/production-env-check.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

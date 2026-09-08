@@ -4,16 +4,16 @@ import { loadApiEnv, parseCorsOrigins } from '@qzu/config'
 import { createApp } from './app'
 import { assertSafeDatabaseTarget } from './database-target'
 import { loadApiLocalEnv } from './env'
-import { createMySqlRepository } from './mysql-repository'
+import { createDatabase } from '@qzu/db'
+import { MySqlBusinessRepository } from './mysql-repository'
 import { createCasdoorClient } from './casdoor'
 
 loadApiLocalEnv()
 const env = loadApiEnv()
 assertSafeDatabaseTarget(env)
 
-const repository = env.REPOSITORY_MODE === 'mysql'
-  ? createMySqlRepository(env.DATABASE_URL!)
-  : undefined
+const database = env.REPOSITORY_MODE === 'mysql' ? createDatabase(env.DATABASE_URL!) : undefined
+const repository = database ? new MySqlBusinessRepository(database.db) : undefined
 const casdoor = env.CASDOOR_CLIENT_ID && env.CASDOOR_CLIENT_SECRET
   ? createCasdoorClient({ issuer: env.CASDOOR_ISSUER, clientId: env.CASDOOR_CLIENT_ID, clientSecret: env.CASDOOR_CLIENT_SECRET, redirectUri: env.CASDOOR_REDIRECT_URI })
   : undefined
@@ -44,6 +44,8 @@ const app = createApp({
   ...(repository ? { repository } : {}),
   publicH5Url: env.PUBLIC_H5_URL,
   publicAdminUrl: env.PUBLIC_ADMIN_URL,
+  repositoryMode: env.REPOSITORY_MODE,
+  ...(database ? { checkDatabaseReadiness: database.checkReadiness } : {}),
 })
 
 serve({ fetch: app.fetch, port: env.API_PORT }, (info) => {

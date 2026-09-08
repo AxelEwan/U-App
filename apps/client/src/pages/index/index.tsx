@@ -4,5 +4,6 @@ import HomeDashboard from './HomeDashboard'
 
 export default function HomePage() {
   const { state } = useMock()
-  return <PageShell eyebrow="QZU · DAILY" title={`早上好，${state.currentUser.displayName}`} subtitle="今天的课程和签到，都在这里。"><HomeDashboard /></PageShell>
+  const authenticated = Boolean(state.currentUser.id)
+  return <PageShell eyebrow="QZU · DAILY" title={authenticated ? `早上好，${state.currentUser.displayName}` : 'U-App'} subtitle={authenticated ? '今天的课程和签到，都在这里。' : '登录后查看你的真实课程和签到。'}><HomeDashboard /></PageShell>
 }

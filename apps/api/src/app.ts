@@ -25,6 +25,8 @@ import {
   webLoginChallengeApproveSchema,
   webLoginChallengeStatusResponseSchema,
   healthResponseSchema,
+  readinessResponseSchema,
+  capabilitiesResponseSchema,
   meResponseSchema,
   projectsResponseSchema,
   projectMembersResponseSchema,
@@ -63,6 +65,8 @@ export interface ApiRuntimeConfig {
   readonly handleCasdoorCallback?: (url: string) => Promise<CasdoorCallbackResult>
   readonly publicH5Url?: string
   readonly publicAdminUrl?: string
+  readonly repositoryMode?: 'memory' | 'mysql'
+  readonly checkDatabaseReadiness?: () => Promise<{ readonly database: 'ok' | 'unavailable'; readonly schema: 'ok' | 'incomplete' | 'unavailable'; readonly missingTables: readonly string[] }>
 }
 type ApiVariables = { requestId: string }
 type ApiEnv = { Variables: ApiVariables }
@@ -149,6 +153,30 @@ export function createApp(config: ApiRuntimeConfig) {
   app.use('*', async (context, next) => { const startedAt = performance.now(); await next(); console.log(JSON.stringify({ level: 'info', event: 'http_request', requestId: context.get('requestId'), method: context.req.method, path: context.req.path, status: context.res.status, durationMs: Math.round((performance.now() - startedAt) * 100) / 100 })) })
 
   app.get('/health', (context) => context.json(healthResponseSchema.parse({ status: 'ok', service: 'qzu-api', timestamp: new Date().toISOString() })))
+  const getReadiness = async () => {
+    if (config.repositoryMode !== 'mysql' || !config.checkDatabaseReadiness) return { repository: 'memory' as const, database: 'not_required' as const, schema: 'not_required' as const, missingTables: [] as readonly string[] }
+    try {
+      return { repository: 'mysql' as const, ...(await config.checkDatabaseReadiness()) }
+    } catch {
+      return { repository: 'mysql' as const, database: 'unavailable' as const, schema: 'unavailable' as const, missingTables: [] as readonly string[] }
+    }
+  }
+  app.get('/ready', async (context) => {
+    const readiness = await getReadiness()
+    const ready = readiness.repository === 'memory' || (readiness.database === 'ok' && readiness.schema === 'ok')
+    const body = readinessResponseSchema.parse({ status: ready ? 'ready' : 'not_ready', service: 'qzu-api', ...readiness, timestamp: new Date().toISOString() })
+    return context.json(body, ready ? 200 : 503)
+  })
+  app.get('/api/v1/meta/capabilities', async (context) => {
+    const readiness = await getReadiness()
+    return context.json(capabilitiesResponseSchema.parse({
+      api: true,
+      databaseReady: readiness.repository === 'memory' || (readiness.database === 'ok' && readiness.schema === 'ok'),
+      wechatLogin: Boolean(config.exchangeWechatCode && config.createMiniProgramSession),
+      casdoorLogin: Boolean(config.casdoorAuthorizationUrl && config.handleCasdoorCallback && config.createProviderSession),
+      adminPasswordLogin: Boolean(config.adminLoginSecretHash && config.createAdminWebSession),
+    }))
+  })
   app.post('/api/v1/auth/wechat/login', async (context) => {
     if (!config.exchangeWechatCode || !config.createMiniProgramSession) throw new ApiError('AUTHENTICATION_REQUIRED', 'WeChat login is not configured')
     const input = wechatLoginInputSchema.safeParse(await context.req.json())

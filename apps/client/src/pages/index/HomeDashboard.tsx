@@ -6,6 +6,7 @@ import type { OnboardingResponse, SessionSummary, TodayResponse, WebStudentClass
 import { useCountdown } from '../../hooks/useCountdown'
 import { useSessionStatus } from '../../hooks/useSessionStatus'
 import { useMock } from '../../dev-data/context'
+import { ApiRequestError } from '../../repositories/apiRepository'
 
 function timeRange(session: SessionSummary): string {
   const format = (value: string) => new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(value))
@@ -175,20 +176,46 @@ export default function HomeDashboard() {
   const { apiRepository, isDevelopment } = useMock()
   const [today, setToday] = useState<TodayResponse | null>(null)
   const [clockOffset, setClockOffset] = useState(0)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<'API_NETWORK_ERROR' | 'API_NOT_READY' | 'DATABASE_NOT_READY' | 'UNAUTHENTICATED' | null>(null)
+  const [capabilities, setCapabilities] = useState<Awaited<ReturnType<typeof apiRepository.getCapabilities>> | null>(null)
   const [onboarding, setOnboarding] = useState<OnboardingResponse | null>(null)
   const [showOnboardingFinish, setShowOnboardingFinish] = useState(false)
-  const refreshToday = async () => { const value = await apiRepository.getToday(); setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) }
+  const refreshToday = async () => {
+    const readiness = await apiRepository.getReadiness()
+    if (readiness.status !== 'ready') throw new ApiRequestError(503, 'API_NOT_READY')
+    const value = await apiRepository.getToday()
+    setClockOffset(new Date(value.serverTime).getTime() - Date.now())
+    setToday(value)
+    setError(null)
+  }
+  const loadError = async (value: unknown) => {
+    if (value instanceof ApiRequestError && value.statusCode === 401) { setError('UNAUTHENTICATED'); return }
+    if (value instanceof ApiRequestError && value.statusCode === 503) {
+      try {
+        const readiness = await apiRepository.getReadiness()
+        setError(readiness.database === 'unavailable' || readiness.schema === 'unavailable' || readiness.schema === 'incomplete' ? 'DATABASE_NOT_READY' : 'API_NOT_READY')
+      } catch { setError('API_NETWORK_ERROR') }
+      return
+    }
+    setError('API_NETWORK_ERROR')
+  }
   useEffect(() => {
     let active = true
-    void apiRepository.getToday().then((value) => { if (active) { setClockOffset(new Date(value.serverTime).getTime() - Date.now()); setToday(value) } }).catch(() => { if (active) setError(true) })
+    void refreshToday().catch((value: unknown) => { if (active) void loadError(value) })
     return () => { active = false }
   }, [apiRepository])
   useEffect(() => { void apiRepository.getOnboarding().then((value) => { if (!value.classOptions.length) return; if (value.status !== 'READY') setOnboarding(value); else if (Taro.getStorageSync('qzu_onboarding_guidance_done') !== '1') setShowOnboardingFinish(true) }).catch(() => undefined) }, [apiRepository])
+  useEffect(() => { if (error === 'UNAUTHENTICATED' && !capabilities) void apiRepository.getCapabilities().then(setCapabilities).catch(() => undefined) }, [apiRepository, capabilities, error])
   const handleOnboardingChange = (value: OnboardingResponse) => { if (value.status === 'READY') { setOnboarding(null); setShowOnboardingFinish(true) } else setOnboarding(value) }
   if (onboarding) return <StudentOnboarding value={onboarding} onChange={handleOnboardingChange} />
   if (showOnboardingFinish) return <OnboardingFinish onDone={() => setShowOnboardingFinish(false)} />
-  if (error) return process.env.TARO_ENV === 'weapp' ? <MiniProgramLogin /> : isDevelopment ? <WebStudentLogin /> : <WebChallengeLogin />
+  if (error === 'API_NETWORK_ERROR') return <View className="empty-state"><Text className="empty-title">服务暂时无法连接</Text><Text className="empty-copy">请稍后重试。</Text><View className="primary-button" onClick={() => { void refreshToday().catch((value: unknown) => { void loadError(value) }) }}>重新检测</View></View>
+  if (error === 'DATABASE_NOT_READY' || error === 'API_NOT_READY') return <View className="empty-state"><Text className="empty-title">课程数据正在初始化</Text><Text className="empty-copy">请稍后再试。</Text><View className="primary-button" onClick={() => { void refreshToday().catch((value: unknown) => { void loadError(value) }) }}>重新检测</View></View>
+  if (error === 'UNAUTHENTICATED') {
+    if (process.env.TARO_ENV === 'weapp') return capabilities?.wechatLogin === false ? <View className="empty-state"><Text className="empty-title">微信登录暂未启用</Text><Text className="empty-copy">请稍后再试。</Text></View> : <MiniProgramLogin />
+    if (isDevelopment) return <WebStudentLogin />
+    return capabilities?.wechatLogin === false ? <View className="empty-state"><Text className="empty-title">微信登录暂未启用</Text><Text className="empty-copy">请稍后再试。</Text></View> : <WebChallengeLogin />
+  }
   if (!today) return <View className="card"><Text className="card-meta">正在读取今日安排…</Text></View>
   const list = today.todaySessions
   return <>

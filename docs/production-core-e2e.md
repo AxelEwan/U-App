@@ -17,10 +17,16 @@ DEV_AUTH_ENABLED=false
 
 ```bash
 cd /www/wwwroot/u-app
-pnpm db:production-preflight
+node --env-file=/etc/u-app/api-production.env packages/db/scripts/production-preflight.mjs
 ```
 
 确认输出目标为 `u_app`、`127.0.0.1:3306`。若状态为 `UNKNOWN`，停止操作。
+
+如需只检查环境变量，不会打印任何 secret：
+
+```bash
+node --env-file=/etc/u-app/api-production.env packages/db/scripts/production-env-check.mjs
+```
 
 ## 2. 备份并人工 migration
 
@@ -30,16 +36,25 @@ mysqldump --defaults-extra-file=/etc/u-app/mysql-backup.cnf \
   --single-transaction --routines --events --triggers u_app \
   > /var/backups/u-app/u_app-before-migration-$(date +%F-%H%M%S).sql
 
-MIGRATION_CONFIRM=u_app-production pnpm db:migrate
+MIGRATION_CONFIRM=u_app-production \
+  node --env-file=/etc/u-app/api-production.env packages/db/scripts/migrate-safe.mjs
 ```
 
-再次运行 `pnpm db:production-preflight`，确认状态为 `MANAGED`。
+再次运行：
+
+```bash
+node --env-file=/etc/u-app/api-production.env packages/db/scripts/production-preflight.mjs
+```
+
+确认状态为 `MANAGED`。
 
 ## 3. 导入 academic config
 
 ```bash
 ACADEMIC_IMPORT_CONFIRM=u_app-production \
-  pnpm db:import-academic \
+  node --env-file=/etc/u-app/api-production.env \
+  apps/api/node_modules/tsx/dist/cli.mjs \
+  packages/db/scripts/import-academic-config.mjs \
   --file /etc/u-app/private/2026-fall.academic.json
 ```
 
@@ -49,7 +64,8 @@ ACADEMIC_IMPORT_CONFIRM=u_app-production \
 
 ```bash
 ROSTER_IMPORT_CONFIRM=u_app-production \
-  pnpm db:import-roster \
+  node --env-file=/etc/u-app/api-production.env \
+  packages/db/scripts/import-roster.mjs \
   --file /etc/u-app/private/2026-fall.roster.csv \
   --semester 2026-fall
 ```
@@ -60,16 +76,31 @@ CSV 只允许 `class_code,student_no,display_name`，不得进入 GitHub。
 
 ```bash
 SESSION_MATERIALIZE_CONFIRM=u_app-production \
-  pnpm db:materialize-sessions --semester 2026-fall
+  node --env-file=/etc/u-app/api-production.env \
+  apps/api/node_modules/tsx/dist/cli.mjs \
+  packages/db/scripts/materialize-sessions.ts \
+  --semester 2026-fall
 ```
 
 ## 6. 验证核心数据
 
 ```bash
-pnpm db:verify-core --semester 2026-fall
+node --env-file=/etc/u-app/api-production.env \
+  packages/db/scripts/verify-core.mjs \
+  --semester 2026-fall
 ```
 
 成功标志为 `CORE_DATA_READY`。失败时只根据缺失项排查，不绕过检查。
+
+迁移和导入完成后，先确认服务 readiness；这两个 endpoint 不返回数据库地址、密码或业务数据：
+
+```bash
+curl --fail --silent --show-error https://api-u.x-lab.top/health
+curl --fail --silent --show-error https://api-u.x-lab.top/ready
+curl --fail --silent --show-error https://api-u.x-lab.top/api/v1/meta/capabilities
+```
+
+`/ready` 返回 `200` 且 `status=ready` 后，才继续下面的 NORMAL 验收。空库或缺表时应返回 `503`，不应绕过。
 
 ## 7. 人工 NORMAL 验收
 

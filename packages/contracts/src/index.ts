@@ -40,6 +40,27 @@ export const healthResponseSchema = z.object({
   timestamp: z.iso.datetime(),
 })
 
+export const readinessResponseSchema = z.object({
+  status: z.enum(['ready', 'not_ready']),
+  service: z.literal('qzu-api'),
+  repository: z.enum(['mysql', 'memory']),
+  database: z.enum(['ok', 'unavailable', 'not_required']),
+  schema: z.enum(['ok', 'incomplete', 'unavailable', 'not_required']),
+  missingTables: z.array(z.string()).optional(),
+  timestamp: z.iso.datetime(),
+})
+
+export const capabilitiesResponseSchema = z.object({
+  api: z.boolean(),
+  databaseReady: z.boolean(),
+  wechatLogin: z.boolean(),
+  casdoorLogin: z.boolean(),
+  adminPasswordLogin: z.boolean(),
+})
+
+export type ReadinessResponse = z.infer<typeof readinessResponseSchema>
+export type CapabilitiesResponse = z.infer<typeof capabilitiesResponseSchema>
+
 export const projectTypeSchema = z.enum(['COURSE', 'ACTIVITY'])
 export const projectStatusSchema = z.enum(['DRAFT', 'ACTIVE', 'ARCHIVED'])
 export const rosterModeSchema = z.enum(['ROSTER', 'FREE_FORM', 'MIXED'])

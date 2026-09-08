@@ -1,4 +1,4 @@
-import { attendanceRecordsResponseSchema, healthResponseSchema, projectSummarySchema, timetableResponseSchema, todayResponseSchema } from '@qzu/contracts'
+import { attendanceRecordsResponseSchema, capabilitiesResponseSchema, healthResponseSchema, projectSummarySchema, readinessResponseSchema, timetableResponseSchema, todayResponseSchema } from '@qzu/contracts'
 import { describe, expect, it } from 'vitest'
 import { scryptSync } from 'node:crypto'
 
@@ -70,6 +70,41 @@ describe('API application', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Request-Id')).toBeTruthy()
     expect(healthResponseSchema.parse(await response.json()).status).toBe('ok')
+  })
+
+  it('reports MySQL readiness and boolean auth capabilities without secrets', async () => {
+    const app = createApp({
+      corsOrigins: [],
+      repositoryMode: 'mysql',
+      checkDatabaseReadiness: () => Promise.resolve({ database: 'ok', schema: 'ok', missingTables: [] }),
+    })
+    const ready = await app.request('/ready')
+    expect(ready.status).toBe(200)
+    expect(readinessResponseSchema.parse(await ready.json()).status).toBe('ready')
+    const capabilities = await app.request('/api/v1/meta/capabilities')
+    expect(capabilities.status).toBe(200)
+    expect(capabilitiesResponseSchema.parse(await capabilities.json())).toEqual({ api: true, databaseReady: true, wechatLogin: false, casdoorLogin: false, adminPasswordLogin: false })
+  })
+
+  it('returns 503 readiness when the production database schema is unavailable', async () => {
+    const app = createApp({
+      corsOrigins: [],
+      repositoryMode: 'mysql',
+      checkDatabaseReadiness: () => Promise.resolve({ database: 'ok', schema: 'incomplete', missingTables: ['courses'] }),
+    })
+    const response = await app.request('/ready')
+    expect(response.status).toBe(503)
+    expect(readinessResponseSchema.parse(await response.json())).toMatchObject({ status: 'not_ready', database: 'ok', schema: 'incomplete', missingTables: ['courses'] })
+  })
+
+  it('keeps optional auth providers unavailable without crashing the API', async () => {
+    const app = createApp({ corsOrigins: [], devAuthEnabled: false })
+    const wechat = await app.request('/api/v1/auth/wechat/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: 'fictional-code' }) })
+    const casdoor = await app.request('/api/v1/auth/casdoor/start')
+    const admin = await app.request('/api/v1/auth/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'fictional-password' }) })
+    expect(wechat.status).toBe(401)
+    expect(casdoor.status).toBe(401)
+    expect(admin.status).toBe(401)
   })
 
   it('does not grant CORS to unknown origins', async () => {

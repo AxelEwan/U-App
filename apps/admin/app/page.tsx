@@ -1,6 +1,7 @@
 import Link from 'next/link'
 
 import { getDevelopmentAdminSession } from '../lib/auth'
+import ReadinessPanel from './ReadinessPanel'
 
 export default function DashboardPage() {
   const session = getDevelopmentAdminSession()
@@ -16,6 +17,7 @@ export default function DashboardPage() {
           {session ? `Dev Auth · ${session.displayName}` : '需要生产登录'}
         </span>
       </header>
+      <ReadinessPanel />
       <section className="metric-grid" aria-label="平台状态">
         <article className="metric-card"><span>项目模型</span><strong>Course + Activity</strong></article>
         <article className="metric-card"><span>业务 API</span><strong>Hono / v1</strong></article>

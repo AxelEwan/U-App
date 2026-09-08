@@ -1,4 +1,4 @@
-import type { AttendancePolicy, AttendanceRecord, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, CreateWebLoginChallengeOutput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebLoginChallengeStatusResponse, WebStudentClassOption } from '@qzu/contracts'
+import type { AttendancePolicy, AttendanceRecord, CapabilitiesResponse, CheckInInput, CreateAttendancePolicyInput, CreateProjectInput, CreateScheduleRuleInput, CreateWebLoginChallengeOutput, EnrollElectivesInput, MeResponse, OnboardingResponse, ProjectMember, ProjectSummary, ReadinessResponse, ScheduleRule, SessionSummary, TodayResponse, TimetableResponse, VerifyStudentInput, WebLoginChallengeStatusResponse, WebStudentClassOption } from '@qzu/contracts'
 import Taro from '@tarojs/taro'
 
 import type { ClientRepository } from './types'
@@ -7,6 +7,13 @@ const API_BASE_URL = process.env.TARO_APP_API_BASE_URL
   ?? (process.env.TARO_ENV === 'weapp' ? 'http://127.0.0.1:3004' : 'http://localhost:3004')
 const DEV_AUTH_HEADER_ENABLED = process.env.NODE_ENV !== 'production' && process.env.TARO_APP_ENABLE_DEV_AUTH === 'true'
 interface ListResponse<T> { readonly items: T[] }
+
+export class ApiRequestError extends Error {
+  public constructor(public readonly statusCode: number, public readonly code?: string) {
+    super(code ?? `API_HTTP_${statusCode}`)
+    this.name = 'ApiRequestError'
+  }
+}
 
 export class ApiRepository implements ClientRepository {
   private devUser: 'student' | 'admin' = 'student'
@@ -50,9 +57,20 @@ export class ApiRepository implements ClientRepository {
       credentials: 'include',
       header: { ...(options.header ?? {}), ...authHeader, ...devHeader },
     })
-    if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`API request failed: ${response.statusCode}`)
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      const body = response.data as unknown as { error?: { code?: unknown } }
+      throw new ApiRequestError(response.statusCode, typeof body?.error?.code === 'string' ? body.error.code : undefined)
+    }
     return response.data
   }
+
+  async getReadiness(): Promise<ReadinessResponse> {
+    const response = await Taro.request<ReadinessResponse>({ url: `${this.baseUrl}/ready`, method: 'GET', credentials: 'include' })
+    if (response.statusCode !== 200 && response.statusCode !== 503) throw new ApiRequestError(response.statusCode)
+    return response.data
+  }
+
+  getCapabilities(): Promise<CapabilitiesResponse> { return this.request<CapabilitiesResponse>('/api/v1/meta/capabilities') }
 
   async listProjects(): Promise<readonly ProjectSummary[]> {
     return (await this.request<ListResponse<ProjectSummary>>('/api/v1/projects')).items

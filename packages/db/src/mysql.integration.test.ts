@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import mysql from 'mysql2/promise'
 import { describe, expect, it } from 'vitest'
 
-import { createDatabase } from './client'
+import { checkPoolReadiness, createDatabase } from './client'
 import { MySqlBusinessRepository } from '../../../apps/api/src/mysql-repository'
 
 const databaseUrl = process.env.MYSQL_INTEGRATION_DATABASE_URL
@@ -26,10 +26,14 @@ async function applyCleanMigrations(url: string): Promise<mysql.Pool> {
   if (current.database_name !== database) throw new Error('MySQL integration database selection mismatch')
   const [existing] = await pool.query('SHOW TABLES') as [Record<string, unknown>[], unknown]
   if (existing.length) throw new Error('MySQL integration database must be empty before the test')
+  const beforeMigration = await checkPoolReadiness(pool, database)
+  if (beforeMigration.database !== 'ok' || beforeMigration.schema !== 'incomplete') throw new Error('MySQL integration database must be not ready before migrations')
   for (const file of ['0000_clean_baseline.sql', '0001_exotic_earthquake.sql', '0002_orange_santa_claus.sql', '0003_deep_doctor_faustus.sql']) {
     const sql = await readFile(resolve(root, 'packages/db/migrations', file), 'utf8')
     for (const statement of sql.split(/--> statement-breakpoint\s*/).map((value) => value.trim()).filter(Boolean)) await pool.query(statement)
   }
+  const afterMigration = await checkPoolReadiness(pool, database)
+  if (afterMigration.database !== 'ok' || afterMigration.schema !== 'ok') throw new Error('MySQL integration database must be ready after migrations')
   return pool
 }
 
